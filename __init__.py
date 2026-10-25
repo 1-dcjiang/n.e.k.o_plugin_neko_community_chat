@@ -54,6 +54,11 @@ class NekoCommunityChatPlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def on_startup(self, **_):
+        # 0) 注册静态面板目录（宿主 /plugin/neko_community_chat/ui/* → static/*）
+        try:
+            self.register_static_ui("static", index_file="chat.html")
+        except Exception:  # noqa: BLE001
+            logger.warning("register_static_ui failed", exc_info=True)
         # 1) 本地消息服务（127.0.0.1:7870，纯标准库）；端口被占（已有实例）则复用不报错
         try:
             if not _port_in_use(server_port()):
@@ -136,7 +141,6 @@ class NekoCommunityChatPlugin(NekoPluginBase):
             self.ctx.push_message(
                 visibility=[],
                 ai_behavior="respond",
-                message=_SEND_NOTE.format(text=text[:300]),
                 parts=[{"type": "text", "text": _SEND_NOTE.format(text=text[:300])}],
                 source=self.plugin_id,
                 coalesce_key="community_chat_msg",

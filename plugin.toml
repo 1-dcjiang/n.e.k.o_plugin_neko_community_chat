@@ -35,7 +35,7 @@ enabled = true
 [[plugin.ui.panel]]
 id = "community_chat"
 title = "喵宇宙聊天"
-entry = "static/chat.html"
+entry = "static/index.html"
 context = "community_chat"
 permissions = ["state:read", "action:call"]
 
