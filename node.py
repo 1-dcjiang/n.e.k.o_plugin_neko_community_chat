@@ -1,8 +1,9 @@
-"""neko_community_chat 节点互联层（v0.2.0）。
+"""neko_community_chat 节点互联层（v0.3.0）。
 
-双通道互联：
+三通道互联：
 - LAN：UDP 广播（7872）发现同网段 peer，HTTP 直推 7870/api/relay/inbox
-- 公网：HTTP 轮询中继（Cloudflare Worker，relay_url 可配），register/send/poll
+- 公网（中继）：HTTP 轮询中继（Cloudflare Worker，relay_url 可配），register/send/poll
+- 公网（MQTT）：公共 broker 零配置全球互通（mqtt_enabled 默认开，broker.emqx.io:1883）
 
 纯标准库实现（socket/threading/urllib），零第三方依赖。
 """
@@ -19,6 +20,8 @@ import time
 import urllib.error
 import urllib.request
 
+from . import mqtt as mqtt_mod
+
 logger = logging.getLogger(__name__)
 
 LAN_PORT = 7872
@@ -31,6 +34,12 @@ PORT_ENV = "NEKO_COMMUNITY_CHAT_PORT"
 DEFAULT_PORT_HTTP = 7870
 MAX_TEXT_LEN = 2000
 RATE_LIMIT_PER_PEER = (10.0, 60)  # 10 秒窗口最多 60 条
+
+MQTT_DEFAULT_HOST = "broker.emqx.io"
+MQTT_DEFAULT_CHANNEL = "neko-universe"
+MQTT_ENV_ENABLED = "NEKO_COMMUNITY_MQTT"  # "0" 关闭，空/其他视为跟随设置
+MQTT_DEDUP_WINDOW = 300
+MQTT_DEDUP_MAX = 200
 
 
 def _parse_hello(payload: str) -> dict | None:
@@ -71,6 +80,7 @@ class Node:
         self.peer_id: str = ident["peer_id"]
         self.name: str = ident["name"]
         self.relay_url: str = self._load_relay_url()
+        self.mqtt_cfg: dict = self._load_mqtt_cfg()
 
         self.peers: dict[str, dict] = {}  # peer_id -> {ip, port, name, last_seen}
         self._peer_lock = threading.Lock()
@@ -78,6 +88,9 @@ class Node:
         self._relay_since = 0
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._mqtt: mqtt_mod.MQTTLink | None = None
+        self._mqtt_lock = threading.Lock()
+        self._mqtt_dedup: list[tuple[str, float]] = []
 
     # ── 身份与配置 ──────────────────────────────────────────────
 
@@ -111,8 +124,30 @@ class Node:
         except (OSError, ValueError):
             return ""
 
+    def _load_mqtt_cfg(self) -> dict:
+        env_off = os.environ.get(MQTT_ENV_ENABLED, "").strip() == "0"
+        cfg = {"enabled": not env_off, "host": MQTT_DEFAULT_HOST, "port": mqtt_mod.MQTT_TCP_PORT,
+               "channel": MQTT_DEFAULT_CHANNEL}
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {}
+        if "mqtt_enabled" in d:
+            cfg["enabled"] = bool(d["mqtt_enabled"])
+        if d.get("mqtt_host"):
+            cfg["host"] = str(d["mqtt_host"]).strip()[:120]
+        if d.get("mqtt_port"):
+            try:
+                cfg["port"] = int(d["mqtt_port"])
+            except (TypeError, ValueError):
+                pass
+        if d.get("mqtt_channel"):
+            cfg["channel"] = str(d["mqtt_channel"]).strip()[:64]
+        return cfg
+
     def refresh(self) -> None:
-        """设置变更后重载：昵称/中继 URL 生效（线程安全：只改下次使用）。"""
+        """设置变更后重载：昵称/中继 URL/MQTT 生效（线程安全：只改下次使用）。"""
         try:
             with open(self.settings_file, "r", encoding="utf-8") as f:
                 d = json.load(f)
@@ -128,6 +163,28 @@ class Node:
             except OSError:
                 pass
         self.relay_url = str(d.get("relay_url") or "").strip().rstrip("/")
+        self._apply_mqtt_cfg(d)
+
+    def _apply_mqtt_cfg(self, d: dict) -> None:
+        """MQTT 配置变更时重建链接（保留未变配置）。"""
+        cfg = dict(self.mqtt_cfg)
+        if "mqtt_enabled" in d:
+            cfg["enabled"] = bool(d["mqtt_enabled"])
+        if d.get("mqtt_host"):
+            cfg["host"] = str(d["mqtt_host"]).strip()[:120]
+        if d.get("mqtt_port"):
+            try:
+                cfg["port"] = int(d["mqtt_port"])
+            except (TypeError, ValueError):
+                pass
+        if d.get("mqtt_channel"):
+            cfg["channel"] = str(d["mqtt_channel"]).strip()[:64]
+        changed = cfg != self.mqtt_cfg
+        self.mqtt_cfg = cfg
+        if changed and self._mqtt is not None:
+            self._mqtt.stop()
+            self._mqtt = None
+            self._start_mqtt_if_enabled()
 
     # ── 生命周期 ────────────────────────────────────────────────
 
@@ -139,36 +196,130 @@ class Node:
         self._threads = [lan, relay]
         lan.start()
         relay.start()
-        logger.info("node %s (%s) started, relay=%s", self.peer_id, self.name, self.relay_url or "-")
+        self._start_mqtt_if_enabled()
+        logger.info("node %s (%s) started, relay=%s, mqtt=%s",
+                    self.peer_id, self.name, self.relay_url or "-", self.mqtt_cfg)
+
+    def _start_mqtt_if_enabled(self) -> None:
+        if not self.mqtt_cfg.get("enabled"):
+            return
+        with self._mqtt_lock:
+            if self._mqtt is not None:
+                return
+            self._mqtt = mqtt_mod.MQTTLink(
+                host=self.mqtt_cfg["host"],
+                port=self.mqtt_cfg["port"],
+                channel=self.mqtt_cfg["channel"],
+                peer_id=self.peer_id,
+                peer_name=self.name,
+                on_message=self._on_mqtt_message,
+            )
+            self._mqtt.start()
 
     def stop(self) -> None:
         self._stop.set()
+        with self._mqtt_lock:
+            if self._mqtt is not None:
+                self._mqtt.stop()
+
+    def _on_mqtt_message(self, data: dict) -> None:
+        """收到 MQTT 消息：去重后走统一远端入口。"""
+        if not self._mqtt_dedup_seen(data):
+            return
+        m = data.get("message") or {}
+        if isinstance(m, dict):
+            m["origin"] = "mqtt"
+            m.setdefault("peer_id", data.get("peer_id"))
+            m.setdefault("peer_name", data.get("peer_name"))
+            if data.get("target_peer") and data["target_peer"] != self.peer_id:
+                return
+            try:
+                self.on_incoming(m)
+            except Exception:  # noqa: BLE001
+                logger.debug("mqtt incoming failed", exc_info=True)
+
+    def _mqtt_dedup_seen(self, data: dict) -> bool:
+        m = data.get("message") or {}
+        if not isinstance(m, dict):
+            return False
+        text = str(m.get("text") or "")[:64]
+        if not text:
+            return False
+        fingerprint = f"{data.get('peer_id')}|{text}|{m.get('ts') or ''}"
+        now = time.time()
+        with self._mqtt_lock:
+            self._mqtt_dedup = [(f, t) for f, t in self._mqtt_dedup if now - t < MQTT_DEDUP_WINDOW]
+            if any(f == fingerprint for f, _ in self._mqtt_dedup):
+                return False
+            self._mqtt_dedup.append((fingerprint, now))
+            if len(self._mqtt_dedup) > MQTT_DEDUP_MAX:
+                self._mqtt_dedup = self._mqtt_dedup[-MQTT_DEDUP_MAX:]
+        return True
 
     # ── 对外消息分发（本机产生的消息 → 全网络）────────────────────
 
     def dispatch(self, msg: dict) -> None:
-        """本机产生的消息广播到所有 peer（LAN 直推 + 中继广播）。"""
+        """本机产生的消息广播到所有 peer（LAN 直推 + 中继广播 + MQTT 广播）。"""
         m = dict(msg)
         m.setdefault("peer_id", self.peer_id)
         m.setdefault("peer_name", self.name)
+        m.setdefault("ts", int(time.time()))
         peers = self._snapshot_peers()
         for peer in peers:
             self._lan_push(peer, m)
         if self.relay_url:
             self._relay_send(m, target=None)
+        self._mqtt_broadcast(m)
 
     def send_to(self, target_peer: str, msg: dict) -> bool:
         """定向投递给指定 peer（YUI 回复远端用户用）。"""
         m = dict(msg)
         m.setdefault("peer_id", self.peer_id)
         m.setdefault("peer_name", self.name)
+        m.setdefault("ts", int(time.time()))
         m["target_peer"] = target_peer
         peer = self._get_peer(target_peer)
         if peer is not None:
             return self._lan_push(peer, m)
         if self.relay_url:
             return self._relay_send(m, target=target_peer)
-        return False
+        return self._mqtt_send_to(target_peer, m)
+
+    # ── MQTT 通道 ──────────────────────────────────────────────
+
+    def _mqtt_broadcast(self, msg: dict) -> bool:
+        with self._mqtt_lock:
+            link = self._mqtt
+        if link is None:
+            return False
+        payload = {
+            "peer_id": self.peer_id,
+            "peer_name": self.name,
+            "message": msg,
+        }
+        return link.publish(payload, target_peer=None)
+
+    def _mqtt_send_to(self, target_peer: str, msg: dict) -> bool:
+        with self._mqtt_lock:
+            link = self._mqtt
+        if link is None:
+            return False
+        payload = {
+            "peer_id": self.peer_id,
+            "peer_name": self.name,
+            "target_peer": target_peer,
+            "message": msg,
+        }
+        return link.publish(payload, target_peer=target_peer)
+
+    def mqtt_status(self) -> dict:
+        with self._mqtt_lock:
+            link = self._mqtt
+        if link is None:
+            return {"enabled": bool(self.mqtt_cfg.get("enabled")), "online": False}
+        out = link.status()
+        out["enabled"] = bool(self.mqtt_cfg.get("enabled"))
+        return out
 
     # ── LAN 通道 ────────────────────────────────────────────────
 

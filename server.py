@@ -180,7 +180,7 @@ def _is_private_ip(ip: str) -> bool:
 
 
 def save_settings(d: dict) -> dict:
-    """保存面板设置（昵称/中继 URL），返回合并后的完整设置。"""
+    """保存面板设置（昵称/中继 URL/MQTT 公网通道），返回合并后的完整设置。"""
     p = os.path.join(data_dir(), "settings.json")
     old = {}
     try:
@@ -192,6 +192,17 @@ def save_settings(d: dict) -> dict:
     for k in ("name", "relay_url"):
         if d.get(k) is not None:
             merged[k] = str(d[k]).strip()[:200]
+    for k in ("mqtt_enabled",):
+        if d.get(k) is not None:
+            merged[k] = bool(d[k])
+    for k in ("mqtt_host", "mqtt_channel"):
+        if d.get(k) is not None:
+            merged[k] = str(d[k]).strip()[:200]
+    if d.get("mqtt_port") is not None:
+        try:
+            merged["mqtt_port"] = int(d["mqtt_port"])
+        except (TypeError, ValueError):
+            pass
     try:
         with open(p, "w", encoding="utf-8") as f:
             json.dump(merged, f, ensure_ascii=False, indent=2)
@@ -213,7 +224,7 @@ def load_settings() -> dict:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "neko_community_chat/0.2"
+    server_version = "neko_community_chat/0.3"
 
     def _cors(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -265,14 +276,20 @@ class _Handler(BaseHTTPRequestHandler):
             n = get_node()
             peers = n.peers_snapshot() if n is not None else []
             self_info = {}
+            mqtt_state = None
             if n is not None:
                 self_info = {"peer_id": n.peer_id, "name": n.name, "self": True}
-            return self._json({"ok": True, "self": self_info, "peers": peers})
+                mqtt_state = n.mqtt_status()
+            return self._json({"ok": True, "self": self_info, "peers": peers, "mqtt": mqtt_state})
         if path == "/api/settings":
             s = load_settings()
             n = get_node()
             if n is not None:
                 s.setdefault("name", n.name)
+                s.setdefault("mqtt_enabled", bool(n.mqtt_cfg.get("enabled", True)))
+                s.setdefault("mqtt_host", n.mqtt_cfg.get("host", ""))
+                s.setdefault("mqtt_port", n.mqtt_cfg.get("port", 1883))
+                s.setdefault("mqtt_channel", n.mqtt_cfg.get("channel", ""))
             return self._json({"ok": True, "settings": s})
         if path == "/chat" or path == "/":
             try:
