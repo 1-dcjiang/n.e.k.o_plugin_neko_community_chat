@@ -1,0 +1,45 @@
+[plugin]
+id = "neko_community_chat"
+name = "喵宇宙社区聊天"
+description = """
+让 YUI 接入喵宇宙社区（community.project-neko.cn）的本地聊天插件：本地跑一个消息服务（127.0.0.1:7870），
+提供类似 QQ 的聊天面板——打开 http://127.0.0.1:7870/chat 或访问喵宇宙社区网页时右下角出现聊天气泡，
+与 YUI 实时对话（后台唤醒 YUI、YUI 用 community_chat_send 回消息），聊天历史存本地（%LOCALAPPDATA%/N.E.K.O/neko_community_chat）。
+面板内嵌社区动态流（真实接口 /api/feed + 点赞互动），架构预留官方消息 API（后续开放后可直接对接其他用户聊天）。
+何时用：用户说'和YUI聊天/社区聊天/喵宇宙聊天/打开聊天面板/社区动态/看看社区有什么新动态'时。
+回复纪律：直接给出消息内容或操作结果，不编造聊天记录、不假装已发送未发出的消息。
+"""
+short_description = "喵宇宙社区聊天：本地消息服务 + QQ 式聊天面板（独立页 & 社区网页注入），与 YUI 实时对话，社区动态流内嵌"
+keywords = ["聊天", "chat", "喵宇宙", "社区", "community", "nekoverse", "消息", "message", "面板", "chat panel", "YUI", "对话", "即时通讯", "IM", "浏览器面板", "hosted-ui", "动态", "feed", "油猴", "userscript"]
+version = "0.1.0"
+type = "plugin"
+entry = "plugin.plugins.neko_community_chat:NekoCommunityChatPlugin"
+
+[plugin.author]
+name = "起诉人"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin_runtime]
+enabled = true
+auto_start = true
+
+[plugin.store]
+enabled = true
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "community_chat"
+title = "喵宇宙聊天"
+entry = "static/chat.html"
+context = "community_chat"
+permissions = ["state:read", "action:call"]
+
+[[plugin.ui.guide]]
+id = "quickstart"
+title = "怎么用"
+entry = "docs/guide.md"
