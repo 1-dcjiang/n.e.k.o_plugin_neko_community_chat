@@ -13,7 +13,6 @@ import threading
 import urllib.request
 
 import pytest
-
 from plugin.plugins.neko_community_chat import server as srv
 
 

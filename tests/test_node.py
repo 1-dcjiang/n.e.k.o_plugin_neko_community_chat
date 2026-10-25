@@ -16,7 +16,6 @@ import urllib.error
 import urllib.request
 
 import pytest
-
 from plugin.plugins.neko_community_chat import node as node_mod
 from plugin.plugins.neko_community_chat import server as srv
 
