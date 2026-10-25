@@ -275,7 +275,7 @@ async function loadNodes() {
     box.innerHTML = "";
     // 在线节点
     const card = el("div", "card");
-    card.appendChild(el("h3", "", "在线节点（点"回复"可把消息定向发给对方）"));
+    card.appendChild(el("h3", "", "在线节点（点“回复”可把消息定向发给对方）"));
     const rows = [];
     if (selfPeer) {
       const row = el("div", "peerRow");
@@ -306,8 +306,9 @@ async function loadNodes() {
     const relayRow = el("div", "fieldRow");
     relayRow.appendChild(el("label", "", "中继 URL"));
     const relayInput = el("input", "");
-    relayInput.placeholder = "https://your-relay.workers.dev（可留空=仅局域网）";
+    relayInput.placeholder = "https://your-relay.workers.dev";
     relayRow.appendChild(relayInput);
+    set.appendChild(el("div", "tip", "公网通道：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后，把中继地址填到这里并保存，全球所有装了本插件的人即可互通（含昵称、定向回复）；留空则仅局域网互通。"));
     const save = el("button", "", "保存设置");
     save.id = "saveSettings";
     save.addEventListener("click", async () => {
