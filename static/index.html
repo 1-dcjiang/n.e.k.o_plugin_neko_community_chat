@@ -7,13 +7,14 @@
   * { margin:0; padding:0; box-sizing:border-box; font-family:"Microsoft YaHei",system-ui,sans-serif; }
   body { height:100vh; background:#f4f5f7; overflow:hidden; }
   #app { display:flex; height:100vh; }
-  /* 左侧会话栏 */
-  #sidebar { width:200px; background:#2b2f3a; color:#cfd3dc; display:flex; flex-direction:column; }
+  /* 左侧 */
+  #sidebar { width:212px; background:#2b2f3a; color:#cfd3dc; display:flex; flex-direction:column; }
   #sidebar .brand { padding:16px 14px; font-size:14px; font-weight:600; color:#fff; border-bottom:1px solid #3a3f4d; }
   #sidebar .brand small { display:block; color:#8a90a0; font-weight:400; margin-top:3px; font-size:11px; }
   #sidebar .item { padding:11px 14px; cursor:pointer; font-size:13px; display:flex; align-items:center; gap:8px; }
   #sidebar .item.active { background:#3d4352; color:#fff; }
   #sidebar .item .dot { width:6px; height:6px; border-radius:50%; background:#4caf50; }
+  #sidebar .peerCount { margin-left:auto; font-size:11px; color:#8a90a0; }
   /* 主区 */
   #main { flex:1; display:flex; flex-direction:column; min-width:0; }
   #header { height:52px; background:#fff; border-bottom:1px solid #e3e5e8; display:flex; align-items:center; padding:0 16px; gap:10px; }
@@ -22,44 +23,85 @@
   #header .status { font-size:11px; color:#8a90a0; }
   #header .status.on { color:#4caf50; }
   #messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
-  .msg { display:flex; gap:8px; max-width:72%; }
+  .msg { display:flex; gap:8px; max-width:76%; }
   .msg.user { align-self:flex-end; flex-direction:row-reverse; }
+  .msg.yui { align-self:flex-start; }
+  .msg.remote { align-self:flex-start; }
   .msg .bubble { padding:9px 12px; border-radius:12px; font-size:13px; line-height:1.55; word-break:break-word; white-space:pre-wrap; }
   .msg.user .bubble { background:#95ec69; }
   .msg.yui .bubble { background:#fff; border:1px solid #e3e5e8; }
+  .msg.remote .bubble { background:#eef3fb; border:1px solid #d6e2f5; }
   .msg .meta { font-size:10px; color:#a2a6ad; align-self:flex-end; }
-  #inputbar { display:flex; gap:10px; padding:12px 16px; background:#fff; border-top:1px solid #e3e5e8; }
+  .msg .tag { font-size:10px; padding:1px 6px; border-radius:8px; align-self:flex-end; }
+  .msg.user .tag { background:#c8f7ab; color:#4a7a1f; }
+  .msg.remote .tag { background:#dbe7ff; color:#3a5fb0; }
+  .msg.yui .tag { background:#eceef1; color:#5f6672; }
+  #targetbar { display:flex; align-items:center; gap:8px; padding:6px 16px 0; font-size:11px; color:#7c828c; }
+  #targetbar .t { cursor:pointer; color:#3a5fb0; border-bottom:1px dashed #3a5fb0; }
+  #targetbar .t:hover { color:#1f3f8a; }
+  #inputbar { display:flex; gap:10px; padding:10px 16px 12px; background:#fff; border-top:1px solid #e3e5e8; }
   #input { flex:1; border:1px solid #d9dce1; border-radius:8px; padding:10px 12px; font-size:13px; outline:none; resize:none; height:42px; }
   #send { width:76px; background:#5aa7ff; color:#fff; border:none; border-radius:8px; font-size:13px; cursor:pointer; }
   #send:disabled { background:#c9d4e6; cursor:not-allowed; }
   .tip { text-align:center; font-size:11px; color:#a2a6ad; margin:4px 0; }
+  /* 社区墙 */
   #feedView { display:none; flex:1; overflow-y:auto; padding:16px; }
+  #postBox { display:flex; gap:8px; margin-bottom:12px; }
+  #postInput { flex:1; border:1px solid #d9dce1; border-radius:8px; padding:9px 12px; font-size:13px; outline:none; }
+  #postBtn { width:76px; background:#5aa7ff; color:#fff; border:none; border-radius:8px; font-size:13px; cursor:pointer; }
   .post { background:#fff; border:1px solid #e3e5e8; border-radius:12px; padding:12px 14px; margin-bottom:10px; }
   .post .author { font-size:12px; font-weight:600; color:#333; margin-bottom:4px; }
   .post .content { font-size:13px; color:#444; line-height:1.5; }
   .post .time { font-size:11px; color:#a2a6ad; margin-top:6px; }
+  .post .srcTag { font-size:10px; padding:1px 6px; border-radius:8px; margin-left:6px; }
+  .srcTag.local { background:#c8f7ab; color:#4a7a1f; }
+  .srcTag.remote { background:#dbe7ff; color:#3a5fb0; }
+  .srcTag.official { background:#ffe9c7; color:#a06a1f; }
+  /* 节点与设置 */
+  #nodeView { display:none; flex:1; overflow-y:auto; padding:16px; }
+  .card { background:#fff; border:1px solid #e3e5e8; border-radius:12px; padding:14px 16px; margin-bottom:12px; }
+  .card h3 { font-size:13px; color:#333; margin-bottom:10px; }
+  .peerRow { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px dashed #eef0f3; font-size:13px; }
+  .peerRow:last-child { border-bottom:none; }
+  .peerRow .pname { font-weight:600; color:#333; }
+  .peerRow .pmodel { font-size:11px; color:#8a90a0; }
+  .peerRow .replyBtn { margin-left:auto; font-size:11px; color:#3a5fb0; cursor:pointer; border:1px solid #3a5fb0; border-radius:6px; padding:2px 8px; background:none; }
+  .peerRow .replyBtn:hover { background:#eef3fb; }
+  .fieldRow { display:flex; gap:8px; align-items:center; margin-bottom:10px; font-size:13px; color:#555; }
+  .fieldRow label { width:64px; flex-shrink:0; }
+  .fieldRow input { flex:1; border:1px solid #d9dce1; border-radius:8px; padding:8px 10px; font-size:13px; outline:none; }
+  #saveSettings { background:#5aa7ff; color:#fff; border:none; border-radius:8px; font-size:13px; padding:8px 16px; cursor:pointer; }
   .err { color:#e0513f; font-size:12px; }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="sidebar">
-    <div class="brand">喵宇宙社区聊天<small>neko_community_chat</small></div>
+    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.2</small></div>
     <div class="item active" data-view="chat"><span class="dot"></span>和 YUI 聊天</div>
     <div class="item" data-view="feed"><span class="dot"></span>社区动态</div>
+    <div class="item" data-view="nodes"><span class="dot"></span>节点与设置<span class="peerCount" id="peerCount"></span></div>
   </div>
   <div id="main">
     <div id="header">
       <div class="avatar">喵</div>
       <div>
-        <div class="name">YUI</div>
+        <div class="name" id="chatTitle">YUI</div>
         <div class="status on" id="yuiStatus">在线 · 本地</div>
       </div>
     </div>
     <div id="messages"></div>
-    <div id="feedView"></div>
+    <div id="feedView">
+      <div id="postBox">
+        <input id="postInput" placeholder="发一条社区动态，所有节点可见…">
+        <button id="postBtn">发布</button>
+      </div>
+      <div id="postList"></div>
+    </div>
+    <div id="nodeView"></div>
+    <div id="targetbar">回复给：<span class="t" id="targetName" title="点击切换回复对象">本机 YUI</span><span id="targetHint" style="color:#a2a6ad"></span></div>
     <div id="inputbar">
-      <textarea id="input" placeholder="和 YUI 说点什么…（Enter 发送）"></textarea>
+      <textarea id="input" placeholder="说点什么…（Enter 发送）"></textarea>
       <button id="send">发送</button>
     </div>
   </div>
@@ -68,6 +110,9 @@
 const API = "http://127.0.0.1:7870";
 let lastId = 0;
 let view = "chat";
+let selfPeer = null;
+let peers = [];
+let targetPeer = "";   // 空 = 本机 YUI
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -76,12 +121,25 @@ function el(tag, cls, text) {
   return e;
 }
 
+function msgClass(m) {
+  if (m.role === "user") return "user";
+  if (m.peer_id && m.peer_id !== (selfPeer && selfPeer.peer_id)) return "remote";
+  return "yui";
+}
+
 function renderMessage(m) {
-  const wrap = el("div", "msg " + (m.sender === "user" ? "user" : "yui"));
+  const cls = msgClass(m);
+  const wrap = el("div", "msg " + cls);
   const bubble = el("div", "bubble", m.text);
-  const meta = el("div", "meta", m.ts || "");
+  const meta = el("div", "meta", (m.ts || "") + (m.target_peer ? " · 已回复远端" : ""));
   wrap.appendChild(bubble);
   wrap.appendChild(meta);
+  // 来源标签
+  const tag = el("div", "tag");
+  if (cls === "remote") tag.textContent = (m.peer_name || "远端") + " · " + (m.origin === "relay" ? "公网" : "局域网");
+  else if (cls === "user") tag.textContent = "我";
+  else tag.textContent = "YUI";
+  wrap.appendChild(tag);
   return wrap;
 }
 
@@ -98,10 +156,12 @@ async function send() {
   const btn = document.getElementById("send");
   btn.disabled = true;
   try {
+    const body = { text, sender: "user" };
+    if (targetPeer) body.target_peer = targetPeer;
     const r = await fetch(API + "/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, sender: "user" })
+      body: JSON.stringify(body)
     });
     const j = await r.json();
     if (j.ok && j.message) {
@@ -128,44 +188,177 @@ async function poll() {
     if (j.ok && Array.isArray(j.messages) && j.messages.length) {
       const box = document.getElementById("messages");
       for (const m of j.messages) {
+        if ((m.msg_type || "chat") !== "chat") continue;
         box.appendChild(renderMessage(m));
         lastId = Math.max(lastId, Number(m.id) || 0);
       }
       scrollBottom();
     }
-  } catch (e) { /* 服务未启动时静默，面板仍可显示 */ }
+  } catch (e) { /* 静默 */ }
+}
+
+function renderPost(p) {
+  const post = el("div", "post");
+  const head = el("div", "author", p.author || p.author_name || p.peer_name || "社区用户");
+  const srcTag = el("span", "srcTag " + (p.peer_id ? (p.origin === "relay" ? "remote" : "local") : "official"),
+    p.peer_id ? (p.origin === "relay" ? "公网" : "局域网") : "官方社区");
+  head.appendChild(srcTag);
+  const content = el("div", "content", p.content || p.text || p.title || JSON.stringify(p).slice(0, 120));
+  const time = el("div", "time", p.created_at || p.ts || "");
+  post.appendChild(head);
+  post.appendChild(content);
+  post.appendChild(time);
+  return post;
 }
 
 async function loadFeed() {
-  const view = document.getElementById("feedView");
-  view.innerHTML = "";
+  const listBox = document.getElementById("postList");
+  listBox.innerHTML = "";
   try {
     const r = await fetch(API + "/api/feed");
     const j = await r.json();
-    let data = j.data;
-    try { data = JSON.parse(data); } catch (e) {}
-    let list = [];
-    if (data && Array.isArray(data.posts)) list = data.posts;
-    else if (data && Array.isArray(data.data)) list = data.data;
-    if (!list.length) {
-      view.appendChild(el("div", "tip", "社区暂无动态"));
-      return;
+    if (!j.ok) throw new Error(j.error || "读取失败");
+    // 自建墙帖子（最新在前）
+    const posts = (j.posts || []).slice().reverse();
+    if (posts.length) {
+      listBox.appendChild(el("div", "tip", "—— 自建社区墙 ——"));
+      for (const p of posts) listBox.appendChild(renderPost(p));
     }
-    for (const p of list) {
-      const post = el("div", "post");
-      post.appendChild(el("div", "author", p.author || p.user?.name || "社区用户"));
-      post.appendChild(el("div", "content", p.content || p.text || p.title || JSON.stringify(p).slice(0, 120)));
-      post.appendChild(el("div", "time", p.created_at || ""));
-      view.appendChild(post);
+    // 官方社区
+    let official = j.official && j.official.data;
+    let list = [];
+    if (official) { try { official = JSON.parse(official); } catch (e) {} }
+    if (official && Array.isArray(official.posts)) list = official.posts;
+    else if (official && Array.isArray(official.data)) list = official.data;
+    if (list.length) {
+      listBox.appendChild(el("div", "tip", "—— 官方社区（只读） ——"));
+      for (const p of list) listBox.appendChild(renderPost(p));
+    }
+    if (!posts.length && !list.length) {
+      listBox.appendChild(el("div", "tip", "社区暂无动态，发第一条吧"));
     }
   } catch (e) {
-    view.appendChild(el("div", "tip err", "社区动态读取失败：" + e.message));
+    listBox.appendChild(el("div", "tip err", "社区动态读取失败：" + e.message));
   }
+}
+
+async function postToWall() {
+  const input = document.getElementById("postInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  const btn = document.getElementById("postBtn");
+  btn.disabled = true;
+  try {
+    const r = await fetch(API + "/api/posts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    const j = await r.json();
+    if (j.ok) loadFeed();
+    else input.value = text;
+  } catch (e) { input.value = text; }
+  btn.disabled = false;
+}
+
+async function loadNodes() {
+  try {
+    const r = await fetch(API + "/api/peers");
+    const j = await r.json();
+    if (!j.ok) return;
+    selfPeer = j.self || null;
+    peers = j.peers || [];
+    const cnt = document.getElementById("peerCount");
+    cnt.textContent = peers.length ? peers.length + " 在线" : "";
+    const box = document.getElementById("nodeView");
+    box.innerHTML = "";
+    // 在线节点
+    const card = el("div", "card");
+    card.appendChild(el("h3", "", "在线节点（点"回复"可把消息定向发给对方）"));
+    const rows = [];
+    if (selfPeer) {
+      const row = el("div", "peerRow");
+      row.appendChild(el("span", "pname", selfPeer.name + "（本机）"));
+      row.appendChild(el("span", "pmodel", "peer_id: " + selfPeer.peer_id.slice(0, 20)));
+      rows.push(row);
+    }
+    for (const p of peers) {
+      const row = el("div", "peerRow");
+      row.appendChild(el("span", "pname", p.name));
+      row.appendChild(el("span", "pmodel", (p.ip || "") + " · " + p.peer_id.slice(0, 20)));
+      const btn = el("button", "replyBtn", "回复");
+      btn.addEventListener("click", () => { setTarget(p.peer_id, p.name); });
+      row.appendChild(btn);
+      rows.push(row);
+    }
+    if (!rows.length) card.appendChild(el("div", "tip", "暂无其他在线节点（同一局域网自动发现，公网需配置中继）"));
+    rows.forEach(r => card.appendChild(r));
+    box.appendChild(card);
+    // 设置
+    const set = el("div", "card");
+    set.appendChild(el("h3", "", "本机设置"));
+    const nameRow = el("div", "fieldRow");
+    nameRow.appendChild(el("label", "", "昵称"));
+    const nameInput = el("input", "");
+    nameInput.value = selfPeer ? selfPeer.name : "";
+    nameRow.appendChild(nameInput);
+    const relayRow = el("div", "fieldRow");
+    relayRow.appendChild(el("label", "", "中继 URL"));
+    const relayInput = el("input", "");
+    relayInput.placeholder = "https://your-relay.workers.dev（可留空=仅局域网）";
+    relayRow.appendChild(relayInput);
+    const save = el("button", "", "保存设置");
+    save.id = "saveSettings";
+    save.addEventListener("click", async () => {
+      const sr = await fetch(API + "/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nameInput.value, relay_url: relayInput.value })
+      });
+      const sj = await sr.json();
+      if (sj.ok) {
+        set.appendChild(el("div", "tip", "已保存，节点信息已更新"));
+        loadNodes();
+      } else {
+        set.appendChild(el("div", "tip err", "保存失败：" + (sj.error || "未知")));
+      }
+    });
+    set.appendChild(nameRow);
+    set.appendChild(relayRow);
+    set.appendChild(save);
+    box.appendChild(set);
+    // 预填中继 URL
+    const sr2 = await fetch(API + "/api/settings");
+    const sj2 = await sr2.json();
+    if (sj2.ok && sj2.settings && sj2.settings.relay_url) relayInput.value = sj2.settings.relay_url;
+  } catch (e) {
+    const box = document.getElementById("nodeView");
+    box.innerHTML = "";
+    box.appendChild(el("div", "tip err", "节点信息不可达：" + e.message));
+  }
+}
+
+function setTarget(peerId, name) {
+  targetPeer = peerId;
+  document.getElementById("targetName").textContent = name;
+  document.getElementById("targetHint").textContent = " · 消息将定向发给该节点（不唤醒本机 YUI）";
+  document.getElementById("chatTitle").textContent = "和 " + name + " 聊天";
 }
 
 document.getElementById("send").addEventListener("click", send);
 document.getElementById("input").addEventListener("keydown", ev => {
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); }
+});
+document.getElementById("postBtn").addEventListener("click", postToWall);
+document.getElementById("postInput").addEventListener("keydown", ev => {
+  if (ev.key === "Enter") { ev.preventDefault(); postToWall(); }
+});
+document.getElementById("targetName").addEventListener("click", () => {
+  targetPeer = "";
+  document.getElementById("targetName").textContent = "本机 YUI";
+  document.getElementById("targetHint").textContent = "";
+  document.getElementById("chatTitle").textContent = "YUI";
 });
 document.querySelectorAll("#sidebar .item").forEach(item => {
   item.addEventListener("click", () => {
@@ -174,8 +367,13 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
     view = item.dataset.view;
     document.getElementById("messages").style.display = view === "chat" ? "flex" : "none";
     document.getElementById("feedView").style.display = view === "feed" ? "block" : "none";
-    document.getElementById("inputbar").style.display = view === "chat" ? "flex" : "none";
+    document.getElementById("nodeView").style.display = view === "nodes" ? "block" : "none";
+    const bar = document.getElementById("inputbar");
+    const tbar = document.getElementById("targetbar");
+    bar.style.display = (view === "chat") ? "flex" : "none";
+    tbar.style.display = (view === "chat") ? "flex" : "none";
     if (view === "feed") loadFeed();
+    if (view === "nodes") loadNodes();
   });
 });
 
@@ -186,6 +384,7 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
     if (j.ok && Array.isArray(j.messages)) {
       const box = document.getElementById("messages");
       for (const m of j.messages) {
+        if ((m.msg_type || "chat") !== "chat") continue;
         box.appendChild(renderMessage(m));
         lastId = Math.max(lastId, Number(m.id) || 0);
       }
@@ -194,6 +393,7 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
   } catch (e) {
     document.getElementById("messages").appendChild(el("div", "tip err", "本地服务不可达：" + e.message));
   }
+  loadNodes();
   setInterval(poll, 3000);
 })();
 </script>

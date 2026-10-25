@@ -1,16 +1,18 @@
-"""neko_community_chat 插件：本地消息服务 + 聊天面板 + YUI 唤醒桥。
+"""neko_community_chat 插件：本地消息服务 + 聊天面板 + YUI 唤醒桥 + 节点互联（v0.2.0）。
 
 结构：
-- server.py        本地 HTTP 服务（127.0.0.1:7870）：消息 API / 社区动态代理 / 聊天面板页
+- server.py        本地 HTTP 服务（127.0.0.1:7870）：消息 / 社区墙 / 设置 / peer API
+- node.py          节点互联层：LAN UDP 发现 + HTTP 互推、公网中继轮询
+- relay/worker.js  公网中继（Cloudflare Worker + Durable Object）
 - static/chat.html QQ 式聊天面板（客户端面板 / 油猴 iframe 共用）
 - userscript/      油猴注入脚本（社区网页右下角聊天窗）
 - docs/guide.md    教程
 
 消息流：
-  面板发消息 → server 写 messages.jsonl + inbox/
+  面板发消息 → server 写 messages.jsonl + inbox/，并广播给所有 peer
   → 本插件后台 tick（每 5s）扫 inbox → push_message 唤醒 YUI（注入消息内容）
-  → YUI 用 community_chat_send 回复 → 写 outbox/
-  → tick 扫 outbox → 归入 messages.jsonl → 面板轮询 /api/messages 显示
+  → YUI 用 community_chat_send 回复 → 写 outbox/（可定向 target_peer）
+  → tick 扫 outbox → 归入 messages.jsonl（远端定向则投递给该 peer）→ 面板轮询显示
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import time
 
 from plugin.sdk.plugin import NekoPluginBase, lifecycle, llm_tool, neko_plugin
 
+from . import node as _node
 from . import server as _server
 
 logger = logging.getLogger("N.E.K.O.Plugin_neko_community_chat")
@@ -32,7 +35,7 @@ _TICK_INTERVAL = 5.0          # 后台扫描间隔（秒）
 _INBOX_COOLDOWN = 3.0         # 同一来源消息最短唤醒间隔（防刷屏）
 _MAX_CONSECUTIVE_FAIL = 5     # inbox 消费连续失败上限（到达后暂停该文件避免死循环）
 _SEND_NOTE = (
-    "【喵宇宙社区聊天】用户在聊天面板对你说：{text}"
+    "【喵宇宙社区聊天】{who}在聊天面板对你说：{text}"
     "。请以 YUI 的身份自然回复这条消息，用 community_chat_send 把你的回复发回聊天面板"
     "（不回复时也可不发）。本条是聊天消息，正常对话即可，无需开口播报。"
 )
@@ -44,6 +47,7 @@ class NekoCommunityChatPlugin(NekoPluginBase):
         super().__init__(*args, **kwargs)
         self._server: object = None
         self._server_started = False
+        self._node: _node.Node | None = None
         self._tick_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._last_inject_ts = 0.0
@@ -66,6 +70,19 @@ class NekoCommunityChatPlugin(NekoPluginBase):
             self._server_started = True
         except Exception as exc:  # noqa: BLE001
             logger.warning("community chat server start failed: %s", exc)
+        # 1.25) 局域网互推口（0.0.0.0:7871，只开放 /api/relay/inbox）；失败不阻断
+        try:
+            _server.start_lan_server()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("community chat lan server start failed: %s", exc)
+        # 1.5) 节点互联（LAN 发现 + 公网中继）：接入 server 的消息落地回调
+        try:
+            self._node = _node.Node(_server.data_dir(), on_incoming=_server.incoming_remote,
+                                    http_port=_server.lan_port())
+            _server.set_node(self._node)
+            self._node.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("community chat node start failed: %s", exc)
         # 2) 后台 tick：inbox → 唤醒 YUI；outbox → 归入消息流
         self._start_tick()
         return {"status": "ready", "plugin": "neko_community_chat", "panel": "http://127.0.0.1:7870/chat"}
@@ -127,7 +144,12 @@ class NekoCommunityChatPlugin(NekoPluginBase):
                 continue  # 连续失败过多：停止尝试，保留文件等人处理
             if time.time() - self._last_inject_ts < _INBOX_COOLDOWN:
                 continue
-            ok = self._inject_to_yui(text)
+            peer_id = str(data.get("peer_id") or "")
+            if peer_id and peer_id != (self._node.peer_id if self._node else ""):
+                who = f"{data.get('peer_name') or peer_id[:12]}（{data.get('origin') or '远端'}）"
+            else:
+                who = "用户"
+            ok = self._inject_to_yui(text, who=who)
             if ok:
                 self._last_inject_ts = time.time()
                 self._safe_remove(path)
@@ -135,13 +157,14 @@ class NekoCommunityChatPlugin(NekoPluginBase):
             else:
                 self._fail_map[name] = self._fail_map.get(name, 0) + 1
 
-    def _inject_to_yui(self, text: str) -> bool:
+    def _inject_to_yui(self, text: str, who: str = "用户") -> bool:
         """push_message 注入聊天消息触发 YUI 行动。失败静默返回 False。"""
+        note = _SEND_NOTE.format(who=who, text=text[:300])
         try:
             self.ctx.push_message(
                 visibility=[],
                 ai_behavior="respond",
-                parts=[{"type": "text", "text": _SEND_NOTE.format(text=text[:300])}],
+                parts=[{"type": "text", "text": note}],
                 source=self.plugin_id,
                 coalesce_key="community_chat_msg",
                 priority=0,
@@ -176,10 +199,22 @@ class NekoCommunityChatPlugin(NekoPluginBase):
                 self._notified_outbox.add(name)
                 self._safe_remove(path)
                 continue
+            target_peer = str(data.get("target_peer") or "").strip()
             try:
-                _server.append_message({"sender": "YUI", "text": text, "role": "yui"})
+                _server.append_message({"sender": "YUI", "text": text, "role": "yui",
+                                        "target_peer": target_peer or None,
+                                        "origin": "local", "msg_type": "chat"})
             except OSError:
                 continue  # 写入失败保留文件重试
+            # 定向回复远端用户：投递给对应 peer（LAN 或中继），由该 peer 落到自己消息流
+            if target_peer and self._node is not None:
+                try:
+                    self._node.send_to(target_peer, {
+                        "sender": "YUI", "text": text, "role": "yui",
+                        "msg_type": "chat", "target_peer": target_peer,
+                    })
+                except Exception:  # noqa: BLE001
+                    logger.debug("reply route to %s failed", target_peer, exc_info=True)
             self._notified_outbox.add(name)
             self._safe_remove(path)
 
@@ -198,15 +233,20 @@ class NekoCommunityChatPlugin(NekoPluginBase):
             "把你在喵宇宙社区聊天面板上的回复发出去（发回本地聊天记录，聊天面板会显示）。"
             "何时用：用户通过聊天面板（社区网页右下角聊天窗 / 本地聊天页）给你发了消息，"
             "你要回复时——只发内容本身，不要发指令句。参数 text：你要回复的完整内容（最长 2000 字）。"
+            "参数 target_peer（可选）：当消息来自其他节点的用户（唤醒语里带【远端】来源），"
+            "填对方的 peer_id 才能把回复送回对方的面板；本机用户消息则留空。"
             "注意：这是回复用户聊天消息的唯一通道；无需回复时不要调用。"
         ),
         parameters={
             "type": "object",
-            "properties": {"text": {"type": "string", "description": "要发送的回复内容"}},
+            "properties": {
+                "text": {"type": "string", "description": "要发送的回复内容"},
+                "target_peer": {"type": "string", "description": "回复对象的 peer_id（远端消息时必填，本机消息留空）"},
+            },
             "required": ["text"],
         },
     )
-    async def community_chat_send(self, text: str) -> dict:
+    async def community_chat_send(self, text: str, target_peer: str | None = None) -> dict:
         text = (text or "").strip()
         if not text:
             return {"ok": False, "error": "empty message"}
@@ -217,8 +257,13 @@ class NekoCommunityChatPlugin(NekoPluginBase):
         rid = f"{int(time.time() * 1000)}-{os.getpid()}"
         path = os.path.join(outbox_dir, f"{rid}.json")
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"sender": "YUI", "text": text, "role": "yui", "rid": rid}, f, ensure_ascii=False)
-        return {"ok": True, "sent": True, "note": "已写入聊天记录，面板稍后显示"}
+            json.dump({"sender": "YUI", "text": text, "role": "yui",
+                       "target_peer": (target_peer or "").strip() or None,
+                       "rid": rid}, f, ensure_ascii=False)
+        note = "已写入聊天记录，面板稍后显示"
+        if target_peer:
+            note += "（定向回复远端用户）"
+        return {"ok": True, "sent": True, "note": note}
 
     @llm_tool(
         name="community_chat_read",
