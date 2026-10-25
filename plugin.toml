@@ -13,7 +13,7 @@ Cloudflare Worker）后全球所有装了本插件的节点都能互相聊天、
 """
 short_description = "喵宇宙社区聊天：本地+多节点互联（局域网/公网中继）消息服务，QQ 式聊天面板，YUI 实时对话，自建社区墙"
 keywords = ["聊天", "chat", "喵宇宙", "社区", "community", "nekoverse", "消息", "message", "面板", "chat panel", "YUI", "对话", "即时通讯", "IM", "浏览器面板", "hosted-ui", "动态", "feed", "油猴", "userscript", "互联", "局域网", "LAN", "中继", "relay", "社区墙"]
-version = "0.2.0"
+version = "0.2.1"
 type = "plugin"
 entry = "plugin.plugins.neko_community_chat:NekoCommunityChatPlugin"
 

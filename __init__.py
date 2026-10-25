@@ -36,8 +36,9 @@ _INBOX_COOLDOWN = 3.0         # 同一来源消息最短唤醒间隔（防刷屏
 _MAX_CONSECUTIVE_FAIL = 5     # inbox 消费连续失败上限（到达后暂停该文件避免死循环）
 _SEND_NOTE = (
     "【喵宇宙社区聊天】{who}在聊天面板对你说：{text}"
-    "。请以 YUI 的身份自然回复这条消息，用 community_chat_send 把你的回复发回聊天面板"
-    "（不回复时也可不发）。本条是聊天消息，正常对话即可，无需开口播报。"
+    "。你**必须**先用 community_chat_send 工具把你的回复发回聊天面板"
+    "（这是第一步，用户只会在面板里看到它；远端消息按来源填 target_peer），"
+    "然后可以再自然地说一句。本条是聊天消息，正常对话即可，无需开口播报。"
 )
 
 
@@ -60,7 +61,7 @@ class NekoCommunityChatPlugin(NekoPluginBase):
     async def on_startup(self, **_):
         # 0) 注册静态面板目录（宿主 /plugin/neko_community_chat/ui/* → static/*）
         try:
-            self.register_static_ui("static", index_file="chat.html")
+            self.register_static_ui("static", index_file="chat.html", cache_control="no-cache")
         except Exception:  # noqa: BLE001
             logger.warning("register_static_ui failed", exc_info=True)
         # 1) 本地消息服务（127.0.0.1:7870，纯标准库）；端口被占（已有实例）则复用不报错
@@ -162,7 +163,7 @@ class NekoCommunityChatPlugin(NekoPluginBase):
         note = _SEND_NOTE.format(who=who, text=text[:300])
         try:
             self.ctx.push_message(
-                visibility=[],
+                visibility=["chat"],
                 ai_behavior="respond",
                 parts=[{"type": "text", "text": note}],
                 source=self.plugin_id,
