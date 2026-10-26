@@ -66,6 +66,13 @@
   .post .replyBox { margin-top:6px; display:flex; gap:6px; }
   .post .replyBox input { flex:1; font-size:12px; border:1px solid #d5d9dd; border-radius:6px; padding:4px 8px; }
   .post .replyBox button { font-size:11px; border:1px solid #2563eb; border-radius:6px; padding:2px 10px; background:#2563eb; color:#fff; cursor:pointer; }
+  /* 管理员与清空 */
+  .clrBtn { align-self:center; margin-left:auto; font-size:11px; color:#d04444; cursor:pointer; border:1px solid #e5b8b8; border-radius:6px; padding:2px 8px; background:#fff; white-space:nowrap; }
+  .clrBtn:hover { background:#fdf1f1; }
+  .adminBtn { font-size:11px; border:1px solid #d5d9dd; border-radius:6px; padding:2px 8px; background:#f7f8fa; color:#57606a; cursor:pointer; }
+  .adminBtn:hover { border-color:#c0c4c9; background:#eef0f3; }
+  .adminBtn.danger { color:#d04444; border-color:#e5b8b8; }
+  .tag { font-size:10px; border-radius:4px; padding:1px 6px; color:#8a90a0; background:#eef0f3; }
   /* 节点与设置 */
   #nodeView { display:none; flex:1; overflow-y:auto; padding:16px; }
   .card { background:#fff; border:1px solid #e3e5e8; border-radius:12px; padding:14px 16px; margin-bottom:12px; }
@@ -98,6 +105,7 @@
         <div class="name" id="chatTitle">YUI</div>
         <div class="status on" id="yuiStatus">在线 · 本地</div>
       </div>
+      <div class="clrBtn" id="clearChat" title="清空本机与 YUI 的聊天记录（保留远端消息与社区动态）">清空聊天</div>
     </div>
     <div id="messages"></div>
     <div id="feedView">
@@ -122,6 +130,43 @@ let view = "chat";
 let selfPeer = null;
 let peers = [];
 let targetPeer = "";   // 空 = 本机 YUI
+let isAdmin = false;
+let mutedList = [];
+let blockedList = [];
+
+async function loadAdmin() {
+  try {
+    const r = await fetch(API + "/api/settings");
+    const j = await r.json();
+    isAdmin = !!(j.settings && j.settings.admin);
+    mutedList = (j.settings && j.settings.muted) || [];
+    blockedList = (j.settings && j.settings.blocked) || [];
+  } catch (e) { isAdmin = false; mutedList = []; blockedList = []; }
+  if (view === "feed") loadFeed();
+  if (view === "nodes") loadNodes();
+}
+
+async function adminToggle(action, peerId, name) {
+  const label = action === "mute" ? "禁言" : (action === "unmute" ? "解除禁言" : (action === "block" ? "拉黑" : "解除拉黑"));
+  if (action === "mute" || action === "block") {
+    if (!confirm(label + "节点 " + name + "？" + (action === "block" ? "拉黑后其聊天与帖子均不再显示。" : "禁言后其消息不再显示（可解除）。"))) return;
+  }
+  await fetch(API + "/api/admin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, peer_id: peerId })
+  });
+  await loadAdmin();
+  loadHistory();
+  loadFeed();
+}
+
+async function clearChat() {
+  if (!confirm("确定清空与 YUI 的聊天记录？远端消息与社区动态会保留。")) return;
+  await fetch(API + "/api/clear_chat", { method: "POST" });
+  lastId = 0;
+  loadHistory();
+}
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -150,7 +195,7 @@ function renderMessage(m) {
   else if (cls === "user") tag.textContent = (selfPeer && selfPeer.name) || "我";
   else tag.textContent = "YUI";
   wrap.appendChild(tag);
-  // 撤回按钮：只对自己的消息显示
+  // 撤回按钮：只对自己的消息显示（本地消息可精确定位：peer_id 为本机 / origin=local / 无 peer_id）
   if (cls === "user" && !m.recalled) {
     const rbtn = el("div", "recallBtn", "撤回");
     rbtn.onclick = async () => {
@@ -297,6 +342,20 @@ function renderPost(p) {
     post.appendChild(box);
     inp.focus();
   });
+  // 管理员：删除帖子
+  if (isAdmin) {
+    const del = el("button", "adminBtn danger", "删除");
+    del.addEventListener("click", async () => {
+      if (!confirm("删除这条社区动态及其回复？")) return;
+      await fetch(API + "/api/admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete_post", post_id: p.post_id })
+      });
+      loadFeed();
+    });
+    post.appendChild(del);
+  }
   post.appendChild(replyBtn);
   return post;
 }
@@ -367,6 +426,18 @@ async function loadNodes() {
       const row = el("div", "peerRow");
       row.appendChild(el("span", "pname", p.name));
       row.appendChild(el("span", "pmodel", (p.ip || "") + " · " + p.peer_id.slice(0, 20)));
+      const isMuted = mutedList.includes(p.peer_id);
+      const isBlocked = blockedList.includes(p.peer_id);
+      if (isMuted) row.appendChild(el("span", "tag", "已禁言"));
+      if (isBlocked) row.appendChild(el("span", "tag", "已拉黑"));
+      if (isAdmin) {
+        const mbtn = el("button", "adminBtn", isMuted ? "解除禁言" : "禁言");
+        mbtn.addEventListener("click", () => adminToggle(isMuted ? "unmute" : "mute", p.peer_id, p.name));
+        row.appendChild(mbtn);
+        const bbtn = el("button", "adminBtn", isBlocked ? "解除拉黑" : "拉黑");
+        bbtn.addEventListener("click", () => adminToggle(isBlocked ? "unblock" : "block", p.peer_id, p.name));
+        row.appendChild(bbtn);
+      }
       const btn = el("button", "replyBtn", "回复");
       btn.addEventListener("click", () => { setTarget(p.peer_id, p.name); });
       row.appendChild(btn);
@@ -389,7 +460,10 @@ async function loadNodes() {
     relayInput.type = "password"; // 隐私：默认密文显示（URL 中可能含账号数字），聚焦时明文
     relayInput.placeholder = "https://your-relay.workers.dev";
     relayRow.appendChild(relayInput);
-    set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。留空则用下方公共通道。"));
+    const relayStatus = el("div", "tip");
+    relayStatus.id = "relayStatus";
+    relayRow.appendChild(relayStatus);
+    set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。中继请求自动跟随系统代理/WARP 加速。留空则用下方公共通道。"));
     // 公共通道（MQTT）
     const mqttCard = el("div", "card");
     mqttCard.appendChild(el("h3", "", "公共通道（开箱即用）"));
@@ -464,6 +538,17 @@ async function loadNodes() {
           ? (pj.mqtt.online ? "公共通道已连接（" + pj.mqtt.host + " · 房间 " + pj.mqtt.channel + "）" : "公共通道连接中…（" + pj.mqtt.host + "）")
           : "公共通道已关闭";
       }
+      if (pj.ok && pj.relay) {
+        const rl = pj.relay;
+        const accelText = rl.accel ? "加速：" + rl.accel.label : "";
+        if (rl.configured) {
+          relayStatus.textContent = rl.ok === true
+            ? "中继在线 · " + accelText
+            : (rl.ok === false ? "中继不可达：" + (rl.hint || "") + " " + accelText : "中继等待连接… " + accelText);
+        } else {
+          relayStatus.textContent = "";
+        }
+      }
     } catch (e) { /* 状态非关键 */ }
   } catch (e) {
     const box = document.getElementById("nodeView");
@@ -493,6 +578,7 @@ document.getElementById("targetName").addEventListener("click", () => {
   document.getElementById("targetHint").textContent = "";
   document.getElementById("chatTitle").textContent = "YUI";
 });
+document.getElementById("clearChat").addEventListener("click", clearChat);
 document.querySelectorAll("#sidebar .item").forEach(item => {
   item.addEventListener("click", () => {
     document.querySelectorAll("#sidebar .item").forEach(i => i.classList.remove("active"));
@@ -512,6 +598,7 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
 
 (async function init() {
   await loadNodes();  // 先取 selfPeer（本机昵称），历史消息才能正确显示昵称
+  await loadAdmin();
   try {
     const r = await fetch(API + "/api/history");
     const j = await r.json();

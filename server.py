@@ -131,6 +131,59 @@ def read_posts() -> list[dict]:
     return [m for m in read_all_messages() if (m.get("msg_type") or "chat") == "post"]
 
 
+def _rewrite_all(msgs: list[dict]) -> None:
+    """整文件重写消息流（删除帖子/清空聊天用），保持 id 行号稳定。"""
+    with _ID_LOCK:
+        p = messages_path()
+        with open(p, "w", encoding="utf-8") as f:
+            for m in msgs:
+                f.write(json.dumps(m, ensure_ascii=False) + "\n")
+
+
+def admin_lists() -> dict:
+    """本地管理员设置：禁言(muted)/拉黑(blocked) 的远端 peer_id 列表。"""
+    s = load_settings()
+    return {"muted": list(s.get("muted") or []), "blocked": list(s.get("blocked") or [])}
+
+
+def is_visible(m: dict, s: dict | None = None) -> bool:
+    """本地可见性：被禁言/拉黑的远端节点内容（聊天+帖子）不展示。"""
+    if s is None:
+        s = load_settings()
+    hidden = set(s.get("muted") or []) | set(s.get("blocked") or [])
+    return str(m.get("peer_id") or "") not in hidden
+
+
+def delete_post(post_id: str) -> bool:
+    """删除本地帖子及其回复（消息流按 post_id / reply_to 匹配）。"""
+    if not post_id:
+        return False
+    msgs = read_all_messages()
+    matched = [m for m in msgs
+               if (m.get("msg_type") or "chat") == "post" and str(m.get("post_id") or "") == post_id]
+    if not matched:
+        return False  # 帖子不存在
+    post_keys = {str(m.get("id") or "") for m in matched} | {str(m.get("post_id") or "") for m in matched}
+    nxt = [m for m in msgs
+           if not ((m.get("msg_type") or "chat") == "post" and str(m.get("post_id") or "") == post_id)
+           and str(m.get("reply_to") or "") not in post_keys]
+    if len(nxt) == len(msgs):
+        return False
+    _rewrite_all(nxt)
+    return True
+
+
+def clear_local_chat() -> int:
+    """清空本机与 YUI 的聊天：保留远端消息（origin=relay）与全部帖子，删除其余本地聊天。"""
+    msgs = read_all_messages()
+    keep = [m for m in msgs
+            if (m.get("origin") or "local") == "relay" or (m.get("msg_type") or "chat") == "post"]
+    removed = len(msgs) - len(keep)
+    if removed:
+        _rewrite_all(keep)
+    return removed
+
+
 # ── 本地内容审核（YUI 审核机制的即时兜底）──────────────────────
 # 规则 + 可扩展词表：词表存 data_dir/audit_words.txt（每行一个词，可自行增删）。
 _AUDIT_SPAM_RE = re.compile(r"(.)\1{19,}")  # 连续 20+ 相同字符（刷屏）
@@ -225,11 +278,19 @@ def _apply_pending_recalls() -> None:
             _pending_recalls.discard(uid)
 
 
-def local_posts_feed() -> dict:
+def local_posts_feed(visible_filter=None) -> dict:
     """社区墙：帖子 + 回复（post_reply 按 reply_to 挂到对应帖子下）。"""
+
+    def _all(_m: dict) -> bool:
+        return True
+
+    if visible_filter is None:
+        visible_filter = _all
     posts = []
     replies_by: dict[str, list[dict]] = {}
     for m in read_all_messages():
+        if not visible_filter(m):
+            continue
         mt = m.get("msg_type") or "chat"
         if mt == "post":
             posts.append(m)
@@ -304,6 +365,9 @@ def save_settings(d: dict) -> dict:
     for k in ("mqtt_host", "mqtt_channel"):
         if d.get(k) is not None:
             merged[k] = str(d[k]).strip()[:200]
+    for k in ("muted", "blocked"):
+        if d.get(k) is not None:
+            merged[k] = [str(x).strip()[:64] for x in d[k] if str(x).strip()]
     if d.get("mqtt_port") is not None:
         try:
             merged["mqtt_port"] = int(d["mqtt_port"])
@@ -364,17 +428,20 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self._json({"ok": True, "port": DEFAULT_PORT, "service": "neko_community_chat"})
         if path == "/api/history":
-            return self._json({"ok": True, "messages": read_all_messages()})
+            s = load_settings()
+            return self._json({"ok": True, "messages": [m for m in read_all_messages() if is_visible(m, s)]})
         if path == "/api/messages":
             after = 0
             try:
                 after = int((self.path.split("?", 1)[1] or "").split("after_id=")[1])
             except (IndexError, ValueError):
                 pass
+            s = load_settings()
             # 聊天轮询只返回 chat 消息（社区墙帖子走 /api/feed）
-            return self._json({"ok": True, "messages": [m for m in read_messages(after) if (m.get("msg_type") or "chat") == "chat"]})
+            return self._json({"ok": True, "messages": [m for m in read_messages(after)
+                                                        if (m.get("msg_type") or "chat") == "chat" and is_visible(m, s)]})
         if path == "/api/feed":
-            return self._json(local_posts_feed())
+            return self._json(local_posts_feed(visible_filter=is_visible))
         if path == "/api/peers":
             n = get_node()
             peers = n.peers_snapshot() if n is not None else []
@@ -395,6 +462,9 @@ class _Handler(BaseHTTPRequestHandler):
                 s.setdefault("mqtt_host", n.mqtt_cfg.get("host", ""))
                 s.setdefault("mqtt_port", n.mqtt_cfg.get("port", 1883))
                 s.setdefault("mqtt_channel", n.mqtt_cfg.get("channel", ""))
+            s["admin"] = True  # 本机固定为本地管理员
+            s["muted"] = list(s.get("muted") or [])
+            s["blocked"] = list(s.get("blocked") or [])
             return self._json({"ok": True, "settings": s})
         if path == "/chat" or path == "/":
             try:
@@ -414,6 +484,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self._post_recall()
         if path == "/api/settings":
             return self._post_settings()
+        if path == "/api/admin":
+            return self._post_admin()
+        if path == "/api/clear_chat":
+            removed = clear_local_chat()
+            return self._json({"ok": True, "removed": removed})
         if path != "/api/messages":
             return self._json({"ok": False, "error": "not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
@@ -550,6 +625,44 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "bad json"}, 400)
         merged = save_settings(data)
         return self._json({"ok": True, "settings": merged})
+
+    def _post_admin(self):
+        """本地管理员操作：delete_post / mute / unmute / block / unblock。
+        服务只绑 127.0.0.1，天然仅本机可调用。"""
+        data = self._read_json_body()
+        if data is None:
+            return self._json({"ok": False, "error": "bad json"}, 400)
+        action = str(data.get("action") or "").strip()
+        if action == "delete_post":
+            post_id = str(data.get("post_id") or "").strip()
+            if delete_post(post_id):
+                return self._json({"ok": True, "deleted": post_id})
+            return self._json({"ok": False, "error": "帖子不存在"}, 404)
+        peer = str(data.get("peer_id") or "").strip()[:64]
+        if not peer:
+            return self._json({"ok": False, "error": "bad peer_id"}, 400)
+        s = load_settings()
+        if action == "mute":
+            s.setdefault("muted", [])
+            if peer not in s["muted"]:
+                s["muted"].append(peer)
+            save_settings(s)
+            return self._json({"ok": True, "settings": s})
+        if action == "unmute":
+            s["muted"] = [p for p in s.get("muted") or [] if p != peer]
+            save_settings(s)
+            return self._json({"ok": True, "settings": s})
+        if action == "block":
+            s.setdefault("blocked", [])
+            if peer not in s["blocked"]:
+                s["blocked"].append(peer)
+            save_settings(s)
+            return self._json({"ok": True, "settings": s})
+        if action == "unblock":
+            s["blocked"] = [p for p in s.get("blocked") or [] if p != peer]
+            save_settings(s)
+            return self._json({"ok": True, "settings": s})
+        return self._json({"ok": False, "error": "unknown action"}, 400)
 
 
 _SERVER_PORT: int = DEFAULT_PORT
