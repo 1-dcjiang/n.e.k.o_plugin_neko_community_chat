@@ -140,6 +140,37 @@ class TestServerV2:
         finally:
             threading.Thread(target=s.shutdown, daemon=True).start()
 
+    def test_post_reply(self):
+        """社区动态可回复：post_reply 带 reply_to，feed 聚合到主帖下。"""
+        s, port = self._start()
+        try:
+            status, data = _request(
+                f"http://127.0.0.1:{port}/api/posts", method="POST",
+                body=json.dumps({"text": "主帖标题"}),
+            )
+            assert status == 201
+            pid = data["post"]["post_id"]
+            assert pid and data["post"]["msg_type"] == "post"
+            # 回复该帖
+            status, data = _request(
+                f"http://127.0.0.1:{port}/api/posts", method="POST",
+                body=json.dumps({"text": "这是对主帖的回复", "reply_to": pid}),
+            )
+            assert status == 201
+            assert data["post"]["msg_type"] == "post_reply"
+            assert data["post"]["reply_to"] == pid
+            # feed 聚合：主帖下挂回复
+            status, feed = _request(f"http://127.0.0.1:{port}/api/feed")
+            assert status == 200
+            main = [p for p in feed["posts"] if p.get("post_id") == pid]
+            assert main, "post not in feed"
+            replies = main[0].get("replies", [])
+            assert any(r.get("text") == "这是对主帖的回复" for r in replies), f"reply not aggregated: {replies}"
+            # 回复不带 post_id（只有主帖有），不会出现在 feed 顶层
+            assert not any(p.get("msg_type") == "post_reply" for p in feed["posts"])
+        finally:
+            threading.Thread(target=s.shutdown, daemon=True).start()
+
     def test_targeted_message_skips_inbox(self):
         """面板定向回复远端：带 target_peer 的消息不唤醒本机 YUI（不写 inbox）。"""
         s, port = self._start()

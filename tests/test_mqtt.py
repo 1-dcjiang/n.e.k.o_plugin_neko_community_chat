@@ -181,6 +181,7 @@ def test_connect_fallback_to_local_broker():
     thread.start()
     try:
         assert connected_flag.wait(5), "fallback broker not reached"
+        assert link.connected.wait(2), "link not online after connect"
         assert link.online
         assert link.host == "127.0.0.1"  # 已切到实际连上的 broker
     finally:

@@ -26,6 +26,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import node as node_mod
@@ -128,15 +129,29 @@ def read_posts() -> list[dict]:
 
 
 def local_posts_feed() -> dict:
-    return {"ok": True, "posts": read_posts()}
+    """社区墙：帖子 + 回复（post_reply 按 reply_to 挂到对应帖子下）。"""
+    posts = []
+    replies_by: dict[str, list[dict]] = {}
+    for m in read_all_messages():
+        mt = m.get("msg_type") or "chat"
+        if mt == "post":
+            posts.append(m)
+        elif mt == "post_reply":
+            replies_by.setdefault(str(m.get("reply_to") or ""), []).append(m)
+    for p in posts:
+        key = str(p.get("post_id") or "")
+        by_id = str(p.get("id") or "")
+        got = list(replies_by.get(key, [])) + [r for r in replies_by.get(by_id, []) if r not in replies_by.get(key, [])]
+        p["replies"] = got
+    return {"ok": True, "posts": posts}
 
 
 def incoming_remote(msg: dict) -> None:
-    """远端 peer 消息落地：chat → 消息流 + inbox（唤醒本机 YUI）；post → 仅进消息流。"""
+    """远端 peer 消息落地：chat → 消息流 + inbox（唤醒本机 YUI）；post / post_reply → 仅进消息流。"""
     m = dict(msg)
     m.setdefault("origin", "lan")
     msg_type = m.get("msg_type") or "chat"
-    if msg_type == "post":
+    if msg_type in ("post", "post_reply"):
         append_message(m)
     else:
         recorded = append_message(m)
@@ -251,7 +266,7 @@ class _Handler(BaseHTTPRequestHandler):
             # 聊天轮询只返回 chat 消息（社区墙帖子走 /api/feed）
             return self._json({"ok": True, "messages": [m for m in read_messages(after) if (m.get("msg_type") or "chat") == "chat"]})
         if path == "/api/feed":
-            return self._json({"ok": True, "posts": read_posts()})
+            return self._json(local_posts_feed())
         if path == "/api/peers":
             n = get_node()
             peers = n.peers_snapshot() if n is not None else []
@@ -357,7 +372,7 @@ class _Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True, "received": True}, 200)
 
     def _post_posts(self):
-        """社区墙发帖：进消息流 + 广播给所有 peer。"""
+        """社区墙发帖：新帖（post）或回复（post_reply），广播给所有 peer。"""
         data = self._read_json_body()
         if data is None:
             return self._json({"ok": False, "error": "bad json"}, 400)
@@ -366,7 +381,13 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "bad post"}, 400)
         n = get_node()
         name = n.name if n is not None else "社区用户"
-        msg = {"sender": name, "text": text, "role": "post", "msg_type": "post", "origin": "local"}
+        reply_to = str(data.get("reply_to") or "").strip()[:64]
+        if reply_to:
+            msg = {"sender": name, "text": text, "role": "post_reply", "msg_type": "post_reply",
+                   "reply_to": reply_to, "origin": "local"}
+        else:
+            msg = {"sender": name, "text": text, "role": "post", "msg_type": "post",
+                   "post_id": uuid.uuid4().hex[:12], "origin": "local"}
         recorded = append_message(msg)
         if n is not None:
             n.dispatch(recorded)
