@@ -586,6 +586,10 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             msg = {"sender": name, "text": text, "role": "post", "msg_type": "post",
                    "post_id": uuid.uuid4().hex[:12], "origin": "local"}
+        if n is not None:
+            # 本机帖也带 peer_id/peer_name：前端才能显示自己的昵称、精确定位本人消息
+            msg["peer_id"] = n.peer_id
+            msg["peer_name"] = name
         recorded = append_message(msg)
         if n is not None:
             n.dispatch(recorded)

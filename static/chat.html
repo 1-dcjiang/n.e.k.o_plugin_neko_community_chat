@@ -93,7 +93,7 @@
 <body>
 <div id="app">
   <div id="sidebar">
-    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.4.1</small></div>
+    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.4.2</small></div>
     <div class="item active" data-view="chat"><span class="dot"></span>和 YUI 聊天</div>
     <div class="item" data-view="feed"><span class="dot"></span>社区动态</div>
     <div class="item" data-view="nodes"><span class="dot"></span>节点与设置<span class="peerCount" id="peerCount"></span></div>
@@ -290,9 +290,9 @@ async function loadHistory() {
 
 function renderPost(p) {
   const post = el("div", "post");
-  const head = el("div", "author", p.author || p.author_name || p.peer_name || "社区用户");
+  const head = el("div", "author", p.author || p.author_name || p.peer_name || p.sender || "社区用户");
   const srcTag = el("span", "srcTag " + (p.origin === "relay" ? "remote" : "local"),
-    p.origin === "relay" ? "公网" : "局域网");
+    p.origin === "relay" ? "公网" : (p.origin === "local" ? "本机" : "局域网"));
   head.appendChild(srcTag);
   const content = el("div", "content", p.content || p.text || p.title || JSON.stringify(p).slice(0, 120));
   const time = el("div", "time", p.created_at || p.ts || "");
@@ -305,8 +305,7 @@ function renderPost(p) {
     const rbox = el("div", "replies");
     for (const r of replies) {
       const rw = el("div", "reply");
-      const who = r.sender || r.peer_name || "社区用户";
-      rw.appendChild(el("span", "replyAuthor", who + "："));
+      const who = r.sender || r.peer_name || "社区用户";      rw.appendChild(el("span", "replyAuthor", who + "："));
       rw.appendChild(el("span", "", r.text || ""));
       rbox.appendChild(rw);
     }
