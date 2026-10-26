@@ -91,6 +91,7 @@ class Node:
         self._rate: dict[str, list[float]] = {}
         self._relay_since = 0
         self._relay_state: dict = {"ok": None, "err": "", "last": None}
+        self._warp_attempt: dict = {"state": "idle", "err": "", "last": 0}
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._mqtt: mqtt_mod.MQTTLink | None = None
@@ -468,17 +469,81 @@ class Node:
         except Exception:  # noqa: BLE001
             return False
 
+    # ── 全自动加速：自动下载安装并启用 Cloudflare WARP ──────────
+    WARP_MSI_URL = "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+    WARP_CLI = r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+
+    def _warp_ensure(self) -> dict:
+        """全自动启用 WARP：未安装→静默下载安装官方包；未连接→register+connect。
+        限频 1 小时重试一次，幂等。"""
+        import subprocess
+
+        st = self._warp_attempt
+        if self._detect_warp():
+            st.update({"state": "connected", "err": ""})
+            return st
+        if st["state"] in ("downloading", "installing", "connecting"):
+            return st  # 进行中，不并发
+        if time.time() - st["last"] < 3600:
+            return st  # 限频：1 小时内不重复
+        st["last"] = time.time()
+        cache = os.path.join(os.path.expandvars(r"%LOCALAPPDATA%"), "N.E.K.O", "neko_community_chat", "warp.msi")
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            # 1) 下载官方安装包
+            if not (os.path.exists(cache) and os.path.getsize(cache) > 5_000_000):
+                st["state"] = "downloading"
+                subprocess.run(
+                    ["curl", "-L", "-sS", "-o", cache, self.WARP_MSI_URL,
+                     "--connect-timeout", "30", "--max-time", "300"],
+                    capture_output=True, timeout=330,
+                )
+                if not (os.path.exists(cache) and os.path.getsize(cache) > 5_000_000):
+                    st.update({"state": "failed", "err": "下载 WARP 安装包失败（网络不可达）"})
+                    return st
+            # 2) 静默安装
+            st["state"] = "installing"
+            subprocess.run(["msiexec", "/i", cache, "/quiet", "/norestart"],
+                           capture_output=True, timeout=600)
+            if not os.path.exists(self.WARP_CLI):
+                # 权限不足时提权重装（会弹一次 UAC 确认）
+                try:
+                    subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         f'Start-Process msiexec -ArgumentList "/i", "{cache}", "/quiet", "/norestart" -Verb RunAs -Wait'],
+                        capture_output=True, timeout=600,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            if not os.path.exists(self.WARP_CLI):
+                st.update({"state": "failed", "err": "WARP 安装失败（需要管理员授权一次）"})
+                return st
+            # 3) 注册并连接
+            st["state"] = "connecting"
+            subprocess.run([self.WARP_CLI, "register"], capture_output=True, timeout=60)
+            subprocess.run([self.WARP_CLI, "connect"], capture_output=True, timeout=60)
+            time.sleep(6)
+            if self._detect_warp():
+                st.update({"state": "connected", "err": ""})
+            else:
+                st.update({"state": "failed", "err": "WARP 连接未就绪，请稍后自动重试"})
+            return st
+        except Exception as exc:  # noqa: BLE001
+            st.update({"state": "failed", "err": str(exc)[:200]})
+            return st
+
     def accel_status(self) -> dict:
         """加速系统状态：WARP / 系统代理 / 直连。"""
         warp = self._detect_warp()
         proxy = self._detect_proxy()
+        st = {"warp": warp, "proxy": proxy, "auto": dict(self._warp_attempt)}
         if warp:
-            mode, label = "warp", "Cloudflare WARP 加速中（全局隧道）"
+            st["mode"], st["label"] = "warp", "Cloudflare WARP 加速中（全局隧道）"
         elif proxy:
-            mode, label = "proxy", f"系统代理加速中（{proxy}）"
+            st["mode"], st["label"] = "proxy", f"系统代理加速中（{proxy}）"
         else:
-            mode, label = "direct", "直连（无加速通道，workers.dev 可能被墙）"
-        return {"mode": mode, "warp": warp, "proxy": proxy, "label": label}
+            st["mode"], st["label"] = "direct", "直连（无加速通道，中继将自动安装并启用 WARP 加速）"
+        return st
 
     def _relay_opener(self):
         proxy = self._detect_proxy()
@@ -499,6 +564,12 @@ class Node:
             except Exception as exc:  # noqa: BLE001
                 fails += 1
                 logger.debug("relay poll failed: %s", exc)
+            # 全自动加速：中继连续失败且无任何加速通道时，自动启用 WARP
+            if (self.relay_url and fails >= RELAY_BACKOFF_AFTER
+                    and not self._detect_warp() and not self._detect_proxy()):
+                self._warp_ensure()
+                if self._detect_warp():
+                    fails = 0  # 加速就绪，立即恢复轮询
             interval = RELAY_POLL_INTERVAL * (RELAY_BACKOFF_MULT if fails >= RELAY_BACKOFF_AFTER else 1)
             self._stop.wait(interval)
 
