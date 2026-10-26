@@ -377,10 +377,11 @@ async function loadNodes() {
       }
       if (pj.ok && pj.relay) {
         const rl = pj.relay;
+        const accelText = rl.accel ? "加速：" + rl.accel.label : "";
         if (rl.configured) {
           relayStatus.textContent = rl.ok === true
-            ? "中继在线"
-            : (rl.ok === false ? "中继不可达：" + (rl.hint || "") : "中继等待连接…");
+            ? "中继在线 · " + accelText
+            : (rl.ok === false ? "中继不可达：" + (rl.hint || "") + " " + accelText : "中继等待连接… " + accelText);
         } else {
           relayStatus.textContent = "";
         }

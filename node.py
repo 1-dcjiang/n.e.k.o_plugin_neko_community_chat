@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -409,7 +410,7 @@ class Node:
         """中继通道状态（面板展示 + 故障提示）。"""
         st = dict(self._relay_state)
         st["configured"] = bool(self.relay_url)
-        st["proxy"] = self._detect_proxy() or None
+        st["accel"] = self.accel_status()
         if st["ok"] is False:
             st["hint"] = "中继不可达：请开启 WARP 或系统代理后自动重连；或改用公共通道（MQTT）聊天。"
         elif st["ok"] is None:
@@ -443,6 +444,41 @@ class Node:
         except Exception:  # noqa: BLE001
             pass
         return None
+
+    def _detect_warp(self) -> bool:
+        """检测 Cloudflare WARP 是否在运行：WARP 是全局隧道，直连即可过墙，无需代理配置。"""
+        if not sys.platform.startswith("win"):
+            return False
+        try:
+            import subprocess
+
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq CloudflareWARP.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if out.returncode == 0 and "CloudflareWARP.exe" in out.stdout:
+                return True
+            # WARP 的 WireGuard 隧道网卡处于 Up
+            out2 = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-NetAdapter -Name '*Cloudflare*' -ErrorAction SilentlyContinue | Where-Object Status -eq 'Up').Name"],
+                capture_output=True, text=True, timeout=8,
+            )
+            return bool(out2.stdout.strip())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def accel_status(self) -> dict:
+        """加速系统状态：WARP / 系统代理 / 直连。"""
+        warp = self._detect_warp()
+        proxy = self._detect_proxy()
+        if warp:
+            mode, label = "warp", "Cloudflare WARP 加速中（全局隧道）"
+        elif proxy:
+            mode, label = "proxy", f"系统代理加速中（{proxy}）"
+        else:
+            mode, label = "direct", "直连（无加速通道，workers.dev 可能被墙）"
+        return {"mode": mode, "warp": warp, "proxy": proxy, "label": label}
 
     def _relay_opener(self):
         proxy = self._detect_proxy()
