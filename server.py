@@ -141,8 +141,15 @@ def local_posts_feed() -> dict:
     for p in posts:
         key = str(p.get("post_id") or "")
         by_id = str(p.get("id") or "")
-        got = list(replies_by.get(key, [])) + [r for r in replies_by.get(by_id, []) if r not in replies_by.get(key, [])]
-        p["replies"] = got
+        got = list(replies_by.get(key, [])) + list(replies_by.get(by_id, [])) + list(replies_by.get("id-" + by_id, []))
+        # 去重（同一回复可能同时命中多个 key）
+        seen, uniq = set(), []
+        for r in got:
+            rk = str(r.get("id"))
+            if rk not in seen:
+                seen.add(rk)
+                uniq.append(r)
+        p["replies"] = uniq
     return {"ok": True, "posts": posts}
 
 
