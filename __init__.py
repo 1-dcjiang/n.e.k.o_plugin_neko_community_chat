@@ -4,8 +4,7 @@
 - server.py        本地 HTTP 服务（127.0.0.1:7870）：消息 / 社区墙 / 设置 / peer API
 - node.py          节点互联层：LAN UDP 发现 + HTTP 互推、公网中继轮询
 - relay/worker.js  公网中继（Cloudflare Worker + Durable Object）
-- static/chat.html QQ 式聊天面板（客户端面板 / 油猴 iframe 共用）
-- userscript/      油猴注入脚本（社区网页右下角聊天窗）
+- static/chat.html QQ 式聊天面板（客户端面板）
 - docs/guide.md    教程
 
 消息流：
