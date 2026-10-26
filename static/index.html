@@ -93,7 +93,7 @@
 <body>
 <div id="app">
   <div id="sidebar">
-    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.4.2</small></div>
+    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.4.3</small></div>
     <div class="item active" data-view="chat"><span class="dot"></span>和 YUI 聊天</div>
     <div class="item" data-view="feed"><span class="dot"></span>社区动态</div>
     <div class="item" data-view="nodes"><span class="dot"></span>节点与设置<span class="peerCount" id="peerCount"></span></div>
@@ -411,6 +411,32 @@ async function loadNodes() {
     cnt.textContent = peers.length ? peers.length + " 在线" : "";
     const box = document.getElementById("nodeView");
     box.innerHTML = "";
+    // 本机管理员面板：身份标识 + 禁言/拉黑名单管理（无需有在线节点）
+    if (isAdmin) {
+      const ac = el("div", "card");
+      ac.appendChild(el("h3", "", "本机管理员（仅本机可用）"));
+      const badge = el("div", "fieldRow");
+      badge.appendChild(el("span", "tag", "管理员"));
+      badge.appendChild(el("span", "pmodel", "服务仅绑定本机，此权限只有你能用"));
+      ac.appendChild(badge);
+      ac.appendChild(el("div", "tip", "可删除任意帖子（社区动态里点“删除”）、禁言/拉黑节点（禁言隐藏其消息、拉黑彻底不可见）。"));
+      const mkList = (title, list, action, labelOn) => {
+        const w = el("div", "");
+        w.appendChild(el("div", "tip", title + (list.length ? "：" + list.length + " 个" : "（空）")));
+        list.forEach(id => {
+          const r2 = el("div", "peerRow");
+          r2.appendChild(el("span", "pname", id.slice(0, 24)));
+          const ub = el("button", "adminBtn", labelOn);
+          ub.addEventListener("click", () => adminToggle(action, id, id));
+          r2.appendChild(ub);
+          w.appendChild(r2);
+        });
+        return w;
+      };
+      ac.appendChild(mkList("已禁言节点", mutedList, "unmute", "解除禁言"));
+      ac.appendChild(mkList("已拉黑节点", blockedList, "unblock", "解除拉黑"));
+      box.appendChild(ac);
+    }
     // 在线节点
     const card = el("div", "card");
     card.appendChild(el("h3", "", "在线节点（点“回复”可把消息定向发给对方）"));
@@ -598,8 +624,8 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
 });
 
 (async function init() {
-  await loadNodes();  // 先取 selfPeer（本机昵称），历史消息才能正确显示昵称
-  await loadAdmin();
+  await loadAdmin();  // 先取管理员身份（isAdmin/禁言拉黑名单），节点与历史渲染依赖
+  await loadNodes();  // 再取 selfPeer（本机昵称）与节点列表，管理员面板随节点视图一起渲染
   try {
     const r = await fetch(API + "/api/history");
     const j = await r.json();
