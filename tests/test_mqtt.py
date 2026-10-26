@@ -133,7 +133,7 @@ def test_hosts_list_dedup():
 
 
 def test_connect_fallback_to_local_broker():
-    """主 host 不可达（DNS 失败）时自动回退到可达的本地 mock broker，并更新 host。"""
+    """主 host 不可达（连接拒绝，不依赖外部 DNS）时自动回退到可达的本地 mock broker，并更新 host。"""
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", 0))
@@ -173,7 +173,7 @@ def test_connect_fallback_to_local_broker():
     t = threading.Thread(target=broker_loop, daemon=True)
     t.start()
     link = mqtt_mod.MQTTLink(
-        host="no-such-host.invalid", port=port, channel="t",
+        host="127.0.0.2", port=port, channel="t",
         peer_id="node-A", peer_name="A", on_message=lambda d: None,
         fallback_hosts=["127.0.0.1"],
     )

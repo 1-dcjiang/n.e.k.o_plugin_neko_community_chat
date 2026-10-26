@@ -574,7 +574,9 @@ class Node:
             self._stop.wait(interval)
 
     def _relay_poll(self) -> None:
-        url = f"{self.relay_url}/relay/poll?peer_id={self.peer_id}&since={self._relay_since}"
+        from urllib.parse import quote
+        url = (f"{self.relay_url}/relay/poll?peer_id={self.peer_id}"
+               f"&since={self._relay_since}&name={quote(self.name or '')}")
         req = urllib.request.Request(url, headers={"User-Agent": "neko-community-chat/0.2"})
         try:
             with self._relay_opener().open(req, timeout=RELAY_HTTP_TIMEOUT) as resp:
