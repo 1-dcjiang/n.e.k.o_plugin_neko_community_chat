@@ -96,6 +96,12 @@ export class Relay extends DurableObject {
     this.queues = new Map();    // peer_id -> [{seq, msg}]
     this.peers = new Map();     // peer_id -> {last_seen, name}
     this.rates = new Map();     // peer_id -> [ts]
+    this._gseq = 0;             // 全局单调序号（避免多发送者 seq 混排导致 poll 游标跳跃）
+  }
+
+  _nextGseq() {
+    this._gseq = (this._gseq || 0) + 1;
+    return this._gseq;
   }
 
   _touch(peerId, name) {
@@ -123,12 +129,6 @@ export class Relay extends DurableObject {
     return true;
   }
 
-  _nextSeq(peerId) {
-    const q = this.queues.get(peerId) || [];
-    const seq = q.length ? q[q.length - 1].seq + 1 : 1;
-    return seq;
-  }
-
   async handleSend(body) {
     const peerId = String(body.peer_id || "").slice(0, 64);
     if (!peerId) return json({ ok: false, error: "missing peer_id" }, 400);
@@ -139,7 +139,7 @@ export class Relay extends DurableObject {
     if (!text || text.length > MAX_MSG_LEN) return json({ ok: false, error: "bad message" }, 400);
 
     const envelope = {
-      seq: this._nextSeq(peerId),
+      seq: this._nextGseq(),
       message: Object.assign({}, m, {
         peer_id: peerId,
         peer_name: this.peers.get(peerId).name,
@@ -185,6 +185,6 @@ export class Relay extends DurableObject {
     } else if (q.length > 0) {
       // 全量命中说明自上次后没有新消息，保留
     }
-    return json({ since: this._nextSeq(peerId) - 1, messages: fresh.map((e) => e.message) });
+    return json({ since: this._gseq || 0, messages: fresh.map((e) => e.message) });
   }
 }

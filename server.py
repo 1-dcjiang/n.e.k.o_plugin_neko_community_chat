@@ -85,7 +85,8 @@ def append_message(msg: dict) -> dict:
         p = messages_path()
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-        return msg
+    _apply_pending_recalls()  # 撤回先于消息到达时补标记
+    return msg
 
 
 def write_inbox(msg: dict) -> None:
@@ -190,8 +191,12 @@ def _rewrite_messages(updates: dict) -> None:
                 f.write("\n".join(lines) + "\n")
 
 
+# ── 撤回待处理缓存（recall 先于消息到达时暂存，消息落地后补标记）──────
+_pending_recalls: set[str] = set()
+
+
 def mark_recalled(uid: str) -> bool:
-    """标记一条消息为已撤回（msg_uid 或本地 id 兜底）。"""
+    """标记一条消息为已撤回（msg_uid 或本地 id 兜底）。消息未到时缓存待处理。"""
     if not uid:
         return False
     before = None
@@ -199,13 +204,25 @@ def mark_recalled(uid: str) -> bool:
         if str(m.get("msg_uid") or "") == uid or str(m.get("id") or "") == uid:
             before = m
             break
-    if before is None or before.get("recalled"):
+    if before is None:
+        _pending_recalls.add(uid)  # 消息还没落地，等 append 后补标记
+        return False
+    if before.get("recalled"):
+        _pending_recalls.discard(uid)
         return False
     if str(before.get("msg_uid") or "") == uid:
         _rewrite_messages({"msg_uid": uid, "recalled": True})
     else:
         _rewrite_messages({"id": uid, "recalled": True})
+    _pending_recalls.discard(uid)
     return True
+
+
+def _apply_pending_recalls() -> None:
+    """消息落地后尝试补标记缓存中的撤回。"""
+    for uid in list(_pending_recalls):
+        if mark_recalled(uid):
+            _pending_recalls.discard(uid)
 
 
 def local_posts_feed() -> dict:
@@ -523,7 +540,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not mark_recalled(uid):
             return self._json({"ok": False, "error": "撤回失败"}, 500)
         if n is not None:
-            n.dispatch({"msg_type": "recall", "msg_uid": uid, "origin": "local"})
+            # text 占位：中继 worker 要求消息必有非空 text；远端按 msg_type=recall 处理，忽略正文
+            n.dispatch({"msg_type": "recall", "msg_uid": uid, "text": "（撤回一条消息）", "origin": "local"})
         return self._json({"ok": True}, 200)
 
     def _post_settings(self):

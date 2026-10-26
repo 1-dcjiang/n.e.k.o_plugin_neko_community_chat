@@ -94,6 +94,14 @@ class TestRecall:
         srv.incoming_remote({"msg_type": "recall", "msg_uid": m["msg_uid"], "origin": "relay"})
         assert srv.read_all_messages()[0].get("recalled") is True
 
+    def test_recall_before_message_then_apply(self, _isolated_data):
+        """recall 先于消息到达（竞态）：缓存待处理，消息落地后自动补标记。"""
+        assert srv.mark_recalled("pending-uid-1") is False  # 消息未到 → 缓存
+        srv.append_message({"sender": "远端", "text": "迟到消息", "role": "user",
+                            "origin": "relay", "msg_uid": "pending-uid-1"})
+        assert srv.read_all_messages()[-1].get("recalled") is True  # append 时补标记
+        assert srv._pending_recalls == set()
+
     def test_http_recall_endpoint(self):
         s = srv.start_server(port=0)
         port = s.server_port
