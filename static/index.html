@@ -93,7 +93,7 @@
 <body>
 <div id="app">
   <div id="sidebar">
-    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.4.0</small></div>
+    <div class="brand">喵宇宙社区聊天<small>neko_community_chat v0.4.1</small></div>
     <div class="item active" data-view="chat"><span class="dot"></span>和 YUI 聊天</div>
     <div class="item" data-view="feed"><span class="dot"></span>社区动态</div>
     <div class="item" data-view="nodes"><span class="dot"></span>节点与设置<span class="peerCount" id="peerCount"></span></div>
@@ -457,13 +457,14 @@ async function loadNodes() {
     const relayRow = el("div", "fieldRow");
     relayRow.appendChild(el("label", "", "中继 URL"));
     const relayInput = el("input", "");
-    relayInput.type = "password"; // 隐私：默认密文显示（URL 中可能含账号数字），聚焦时明文
-    relayInput.placeholder = "https://your-relay.workers.dev";
+    relayInput.type = "password"; // 隐私：中继地址一律不显示明文
+    relayInput.placeholder = "留空 = 使用内置默认中继（无需配置，自动加速）";
+    relayInput.autocomplete = "off";
     relayRow.appendChild(relayInput);
     const relayStatus = el("div", "tip");
     relayStatus.id = "relayStatus";
     relayRow.appendChild(relayStatus);
-    set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。中继请求自动跟随系统代理/WARP 加速。留空则用下方公共通道。"));
+    set.appendChild(el("div", "tip", "进阶：留空即用内置默认中继（所有安装者开箱即用、自动加速）。想自建中转（relay/worker.js，详见 docs/guide.md）时可填自己的地址；中继地址出于隐私不显示明文，保存后仅显示启用状态。"));
     // 公共通道（MQTT）
     const mqttCard = el("div", "card");
     mqttCard.appendChild(el("h3", "", "公共通道（开箱即用）"));
@@ -521,7 +522,7 @@ async function loadNodes() {
     const sr2 = await fetch(API + "/api/settings");
     const sj2 = await sr2.json();
     if (sj2.ok && sj2.settings) {
-      if (sj2.settings.relay_url) relayInput.value = sj2.settings.relay_url;
+      // 隐私：中继地址不回显，仅通过状态行显示"内置默认/自定义已启用"
       if (sj2.settings.mqtt_enabled !== undefined) mqttOn.checked = !!sj2.settings.mqtt_enabled;
       if (sj2.settings.mqtt_host) mqttHost.value = sj2.settings.mqtt_host;
       if (sj2.settings.mqtt_channel) mqttChan.value = sj2.settings.mqtt_channel;
@@ -541,10 +542,11 @@ async function loadNodes() {
       if (pj.ok && pj.relay) {
         const rl = pj.relay;
         const accelText = rl.accel ? "加速：" + rl.accel.label : "";
+        const modeText = rl.default_used ? "内置默认中继" : "自定义中继";
         if (rl.configured) {
           relayStatus.textContent = rl.ok === true
-            ? "中继在线 · " + accelText
-            : (rl.ok === false ? "中继不可达：" + (rl.hint || "") + " " + accelText : "中继等待连接… " + accelText);
+            ? modeText + "在线 · " + accelText
+            : (rl.ok === false ? modeText + "不可达：" + (rl.hint || "") + " " + accelText : modeText + "等待连接… " + accelText);
         } else {
           relayStatus.textContent = "";
         }

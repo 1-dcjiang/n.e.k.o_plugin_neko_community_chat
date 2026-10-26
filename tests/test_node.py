@@ -82,6 +82,21 @@ class TestNode:
         n = node_mod.Node(str(tmp_path), on_incoming=lambda m: None)
         assert n.relay_url == "https://r.example.com"
 
+    def test_default_relay_when_unset(self, tmp_path):
+        """无任何中继配置 → 自动使用内置默认中继（所有安装者零配置开箱即用）。"""
+        n = node_mod.Node(str(tmp_path), on_incoming=lambda m: None)
+        assert n.relay_url == node_mod.DEFAULT_RELAY_URL
+        assert n.relay_status()["default_used"] is True
+
+    def test_refresh_keeps_default_relay(self, tmp_path):
+        """settings 变更（仅昵称）后空中继仍回退默认。"""
+        with open(os.path.join(str(tmp_path), "settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"name": "新昵称"}, f)
+        n = node_mod.Node(str(tmp_path), on_incoming=lambda m: None)
+        n.refresh()
+        assert n.relay_url == node_mod.DEFAULT_RELAY_URL
+        assert n.relay_status()["default_used"] is True
+
 
 class TestServerV2:
     def _start(self):
@@ -136,7 +151,9 @@ class TestServerV2:
             )
             assert status == 200 and data["settings"]["name"] == "新昵称"
             status, data = _request(f"http://127.0.0.1:{port}/api/settings")
-            assert data["settings"]["relay_url"] == "https://relay.example.dev"
+            # 隐私：中继地址明文永不返回；自定义中继时 relay_default=False
+            assert "relay_url" not in data["settings"]
+            assert data["settings"]["relay_default"] is False
         finally:
             threading.Thread(target=s.shutdown, daemon=True).start()
 

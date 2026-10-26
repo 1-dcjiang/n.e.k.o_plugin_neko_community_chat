@@ -34,6 +34,9 @@ RELAY_HTTP_TIMEOUT = 5.0    # 中继请求超时（秒）
 RELAY_BACKOFF_AFTER = 3     # 连续失败 N 次后放慢轮询
 RELAY_BACKOFF_MULT = 3      # 放慢倍数
 RELAY_URL_ENV = "NEKO_COMMUNITY_RELAY"
+# 内置默认中继：所有安装者开箱即用（零配置）。为保护隐私，此地址不落盘、
+# 不出现在任何界面与接口返回中；面板仅显示"内置默认"状态。
+DEFAULT_RELAY_URL = "https://neko-community-relay.1691421357.workers.dev"
 PORT_ENV = "NEKO_COMMUNITY_CHAT_PORT"
 DEFAULT_PORT_HTTP = 7870
 MAX_TEXT_LEN = 2000
@@ -126,9 +129,10 @@ class Node:
             return url.rstrip("/")
         try:
             with open(self.settings_file, "r", encoding="utf-8") as f:
-                return str(json.load(f).get("relay_url") or "").strip().rstrip("/")
+                url = str(json.load(f).get("relay_url") or "").strip().rstrip("/")
         except (OSError, ValueError):
-            return ""
+            url = ""
+        return url or DEFAULT_RELAY_URL
 
     def _load_mqtt_cfg(self) -> dict:
         env_off = os.environ.get(MQTT_ENV_ENABLED, "").strip() == "0"
@@ -168,7 +172,7 @@ class Node:
                     json.dump(ident, f, ensure_ascii=False)
             except OSError:
                 pass
-        self.relay_url = str(d.get("relay_url") or "").strip().rstrip("/")
+        self.relay_url = str(d.get("relay_url") or "").strip().rstrip("/") or DEFAULT_RELAY_URL
         self._apply_mqtt_cfg(d)
 
     def _apply_mqtt_cfg(self, d: dict) -> None:
@@ -204,7 +208,9 @@ class Node:
         relay.start()
         self._start_mqtt_if_enabled()
         logger.info("node %s (%s) started, relay=%s, mqtt=%s",
-                    self.peer_id, self.name, self.relay_url or "-", self.mqtt_cfg)
+                    self.peer_id, self.name,
+                    "default" if self.relay_url == DEFAULT_RELAY_URL else ("custom" if self.relay_url else "-"),
+                    self.mqtt_cfg)
 
     def _start_mqtt_if_enabled(self) -> None:
         if not self.mqtt_cfg.get("enabled"):
@@ -411,6 +417,7 @@ class Node:
         """中继通道状态（面板展示 + 故障提示）。"""
         st = dict(self._relay_state)
         st["configured"] = bool(self.relay_url)
+        st["default_used"] = self.relay_url == DEFAULT_RELAY_URL
         st["accel"] = self.accel_status()
         if st["ok"] is False:
             st["hint"] = "中继不可达：请开启 WARP 或系统代理后自动重连；或改用公共通道（MQTT）聊天。"

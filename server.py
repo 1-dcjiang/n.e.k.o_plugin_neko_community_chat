@@ -462,6 +462,8 @@ class _Handler(BaseHTTPRequestHandler):
                 s.setdefault("mqtt_host", n.mqtt_cfg.get("host", ""))
                 s.setdefault("mqtt_port", n.mqtt_cfg.get("port", 1883))
                 s.setdefault("mqtt_channel", n.mqtt_cfg.get("channel", ""))
+            s.pop("relay_url", None)  # 隐私：中继地址明文永不返回（默认/自定义均不可见）
+            s["relay_default"] = bool(n is not None and n.relay_url == node_mod.DEFAULT_RELAY_URL)
             s["admin"] = True  # 本机固定为本地管理员
             s["muted"] = list(s.get("muted") or [])
             s["blocked"] = list(s.get("blocked") or [])
