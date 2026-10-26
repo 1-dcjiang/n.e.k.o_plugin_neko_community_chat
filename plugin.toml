@@ -19,7 +19,7 @@ description = """
 """
 short_description = "喵宇宙社区聊天：内置默认中继（零配置全球互通·地址隐私隐藏）+公网MQTT多broker回退+局域网自动发现，QQ 式聊天面板，YUI 实时对话，自建社区墙，本地管理员（删帖/禁言/拉黑）与一键清空聊天"
 keywords = ["聊天", "chat", "喵宇宙", "社区", "community", "nekoverse", "消息", "message", "面板", "chat panel", "YUI", "对话", "即时通讯", "IM", "浏览器面板", "hosted-ui", "动态", "feed", "互联", "局域网", "LAN", "中继", "relay", "公网", "MQTT", "全球", "社区墙", "管理员", "admin", "禁言", "拉黑", "清空"]
-version = "0.4.4"
+version = "0.4.5"
 type = "plugin"
 entry = "plugin.plugins.neko_community_chat:NekoCommunityChatPlugin"
 

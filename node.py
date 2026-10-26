@@ -434,8 +434,21 @@ class Node:
     # 自动加速：请求自动跟随系统代理（WARP/Clash 等常以 HTTPS_PROXY 或
     # Windows 系统代理形式存在），直连超时后连续失败自动放慢轮询（backoff）。
 
+    LOCAL_PROXY_PORTS = (7890, 7897, 10808, 10809, 1080, 2080)
+
     def _detect_proxy(self) -> str | None:
-        """探测可用代理：优先环境变量，其次 Windows 系统代理。"""
+        """探测可用代理：环境变量 → Windows 系统代理 → 常见本地代理端口。
+        结果缓存 30 秒，避免每次轮询都做端口探测。"""
+        now = time.time()
+        cached = getattr(self, "_proxy_cache", None)
+        if cached and now - cached[1] < 30:
+            return cached[0]
+        proxy = self._probe_proxy()
+        self._proxy_cache = (proxy, now)
+        return proxy
+
+    def _probe_proxy(self) -> str | None:
+        """代理探测实现：环境变量优先，其次系统代理，再探测常见本地代理端口。"""
         for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
             v = os.environ.get(var, "").strip()
             if v:
@@ -451,6 +464,20 @@ class Node:
                 return server if "://" in server else "http://" + server
         except Exception:  # noqa: BLE001
             pass
+        # 常见本地代理端口（Clash/Clash Verge/V2rayN 默认端口；即使系统代理未开启也能自动走）
+        for port in self.LOCAL_PROXY_PORTS:
+            try:
+                import socket
+
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3)
+                try:
+                    s.connect(("127.0.0.1", port))
+                    return f"http://127.0.0.1:{port}"
+                finally:
+                    s.close()
+            except Exception:  # noqa: BLE001
+                continue
         return None
 
     def _detect_warp(self) -> bool:
