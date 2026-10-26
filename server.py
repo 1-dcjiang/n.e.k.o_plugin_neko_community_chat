@@ -257,10 +257,12 @@ class _Handler(BaseHTTPRequestHandler):
             peers = n.peers_snapshot() if n is not None else []
             self_info = {}
             mqtt_state = None
+            relay_state = None
             if n is not None:
                 self_info = {"peer_id": n.peer_id, "name": n.name, "self": True}
                 mqtt_state = n.mqtt_status()
-            return self._json({"ok": True, "self": self_info, "peers": peers, "mqtt": mqtt_state})
+                relay_state = n.relay_status()
+            return self._json({"ok": True, "self": self_info, "peers": peers, "mqtt": mqtt_state, "relay": relay_state})
         if path == "/api/settings":
             s = load_settings()
             n = get_node()

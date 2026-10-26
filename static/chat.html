@@ -297,7 +297,10 @@ async function loadNodes() {
     const relayInput = el("input", "");
     relayInput.placeholder = "https://your-relay.workers.dev";
     relayRow.appendChild(relayInput);
-    set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。留空则用下方公共通道。"));
+    const relayStatus = el("div", "tip");
+    relayStatus.id = "relayStatus";
+    relayRow.appendChild(relayStatus);
+    set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。中继请求自动跟随系统代理/WARP 加速。留空则用下方公共通道。"));
     // 公共通道（MQTT）
     const mqttCard = el("div", "card");
     mqttCard.appendChild(el("h3", "", "公共通道（开箱即用）"));
@@ -371,6 +374,16 @@ async function loadNodes() {
         mqttStatus.textContent = pj.mqtt.enabled
           ? (pj.mqtt.online ? "公共通道已连接（" + pj.mqtt.host + " · 房间 " + pj.mqtt.channel + "）" : "公共通道连接中…（" + pj.mqtt.host + "）")
           : "公共通道已关闭";
+      }
+      if (pj.ok && pj.relay) {
+        const rl = pj.relay;
+        if (rl.configured) {
+          relayStatus.textContent = rl.ok === true
+            ? "中继在线"
+            : (rl.ok === false ? "中继不可达：" + (rl.hint || "") : "中继等待连接…");
+        } else {
+          relayStatus.textContent = "";
+        }
       }
     } catch (e) { /* 状态非关键 */ }
   } catch (e) {

@@ -89,6 +89,7 @@ class Node:
         self._peer_lock = threading.Lock()
         self._rate: dict[str, list[float]] = {}
         self._relay_since = 0
+        self._relay_state: dict = {"ok": None, "err": "", "last": None}
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._mqtt: mqtt_mod.MQTTLink | None = None
@@ -404,6 +405,22 @@ class Node:
                 time.sleep(0.5)
         return False
 
+    def relay_status(self) -> dict:
+        """中继通道状态（面板展示 + 故障提示）。"""
+        st = dict(self._relay_state)
+        st["configured"] = bool(self.relay_url)
+        st["proxy"] = self._detect_proxy() or None
+        if st["ok"] is False:
+            st["hint"] = "中继不可达：请开启 WARP 或系统代理后自动重连；或改用公共通道（MQTT）聊天。"
+        elif st["ok"] is None:
+            st["hint"] = "中继尚未连通，等待轮询中。"
+        else:
+            st["hint"] = "中继在线。"
+        return st
+
+    def _mark_relay(self, ok: bool, err: str = "") -> None:
+        self._relay_state = {"ok": ok, "err": err[:200], "last": time.strftime("%H:%M:%S")}
+
     # ── 公网中继通道（HTTP 轮询，兼容 Cloudflare Worker）──────────
     # 自动加速：请求自动跟随系统代理（WARP/Clash 等常以 HTTPS_PROXY 或
     # Windows 系统代理形式存在），直连超时后连续失败自动放慢轮询（backoff）。
@@ -455,8 +472,10 @@ class Node:
         try:
             with self._relay_opener().open(req, timeout=RELAY_HTTP_TIMEOUT) as resp:
                 data = json.loads(resp.read(2 * 1024 * 1024).decode("utf-8") or "{}")
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as exc:
+            self._mark_relay(False, str(exc))
             return
+        self._mark_relay(True)
         msgs = data.get("messages") or []
         since = int(data.get("since") or 0)
         if since > self._relay_since:
@@ -488,8 +507,11 @@ class Node:
         )
         try:
             with self._relay_opener().open(req, timeout=RELAY_HTTP_TIMEOUT) as resp:
-                return resp.status == 200
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+                ok = resp.status == 200
+                self._mark_relay(ok)
+                return ok
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
+            self._mark_relay(False, str(exc))
             return False
 
     # ── 供 server.py 使用的 peer 查询 ────────────────────────────
