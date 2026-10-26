@@ -5,7 +5,7 @@ description = """
 让 YUI 接入喵宇宙社区的多人聊天插件（v0.4 管理版）：
 本地跑消息服务（127.0.0.1:7870）+ 类似 QQ 的聊天面板（独立页 & 可嵌入网页），与 YUI 实时对话
 （后台唤醒 YUI、YUI 用 community_chat_send 回消息），聊天历史存本地。
-互联（三层通道）：① 内置默认中继（零配置开箱即用，所有安装者默认接入同一公网中继，地址隐私隐藏、自动 WARP/系统代理加速）；
+互联（三层通道）：① 内置默认中继（零配置开箱即用，所有安装者默认接入同一公网中继，地址隐私隐藏、自动走系统代理/已装 WARP 代理模式加速，不拖慢系统）；
 ② 公网通道（默认开启）：公共 MQTT broker 全球互通（默认 broker.hivemq.com，
 自动回退 broker.mqttdashboard.com / broker.emqx.io，国内可达）——任何安装了本插件的节点开箱即聊，含昵称、
 定向回复（YUI 回复可跨节点送达）；③ 局域网：同网段 UDP 自动
@@ -19,7 +19,7 @@ description = """
 """
 short_description = "喵宇宙社区聊天：内置默认中继（零配置全球互通·地址隐私隐藏）+公网MQTT多broker回退+局域网自动发现，QQ 式聊天面板，YUI 实时对话，自建社区墙，本地管理员（删帖/禁言/拉黑）与一键清空聊天"
 keywords = ["聊天", "chat", "喵宇宙", "社区", "community", "nekoverse", "消息", "message", "面板", "chat panel", "YUI", "对话", "即时通讯", "IM", "浏览器面板", "hosted-ui", "动态", "feed", "互联", "局域网", "LAN", "中继", "relay", "公网", "MQTT", "全球", "社区墙", "管理员", "admin", "禁言", "拉黑", "清空"]
-version = "0.4.3"
+version = "0.4.4"
 type = "plugin"
 entry = "plugin.plugins.neko_community_chat:NekoCommunityChatPlugin"
 

@@ -420,9 +420,9 @@ class Node:
         st["default_used"] = self.relay_url == DEFAULT_RELAY_URL
         st["accel"] = self.accel_status()
         if st["ok"] is False:
-            st["hint"] = "中继不可达：请开启 WARP 或系统代理后自动重连；或改用公共通道（MQTT）聊天。"
+            st["hint"] = "中继不可达：聊天自动走公共通道（MQTT）；开启系统代理（如 Clash）后可自动重连中继。"
         elif st["ok"] is None:
-            st["hint"] = "中继尚未连通，等待轮询中。"
+            st["hint"] = "中继尚未连通，等待轮询中；当前可走公共通道（MQTT）。"
         else:
             st["hint"] = "中继在线。"
         return st
@@ -476,84 +476,73 @@ class Node:
         except Exception:  # noqa: BLE001
             return False
 
-    # ── 全自动加速：自动下载安装并启用 Cloudflare WARP ──────────
+    # ── 自动加速：启用已安装的 WARP（代理模式，只给中继用，不接管系统流量）──
     WARP_MSI_URL = "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
     WARP_CLI = r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
 
     def _warp_ensure(self) -> dict:
-        """全自动启用 WARP：未安装→静默下载安装官方包；未连接→register+connect。
-        限频 1 小时重试一次，幂等。"""
+        """自动启用已安装的 WARP 作为中继加速（proxy 模式，系统其他流量不受影响）。
+        未安装 WARP 时不静默下载安装（避免拖慢用户系统），只提示可手动安装。限频 10 分钟。"""
         import subprocess
 
         st = self._warp_attempt
-        if self._detect_warp():
-            st.update({"state": "connected", "err": ""})
-            return st
-        if st["state"] in ("downloading", "installing", "connecting"):
+        if st["state"] in ("connecting",):
             return st  # 进行中，不并发
-        if time.time() - st["last"] < 3600:
-            return st  # 限频：1 小时内不重复
+        if time.time() - st["last"] < 600:
+            return st  # 限频：10 分钟内不重复
         st["last"] = time.time()
-        cache = os.path.join(os.path.expandvars(r"%LOCALAPPDATA%"), "N.E.K.O", "neko_community_chat", "warp.msi")
+        if not os.path.exists(self.WARP_CLI):
+            st.update({"state": "failed", "err": "WARP 未安装：可选装后自动加速（仅中继走代理），或直接用公共通道（MQTT）"})
+            return st
         try:
-            os.makedirs(os.path.dirname(cache), exist_ok=True)
-            # 1) 下载官方安装包
-            if not (os.path.exists(cache) and os.path.getsize(cache) > 5_000_000):
-                st["state"] = "downloading"
-                subprocess.run(
-                    ["curl", "-L", "-sS", "-o", cache, self.WARP_MSI_URL,
-                     "--connect-timeout", "30", "--max-time", "300"],
-                    capture_output=True, timeout=330,
-                )
-                if not (os.path.exists(cache) and os.path.getsize(cache) > 5_000_000):
-                    st.update({"state": "failed", "err": "下载 WARP 安装包失败（网络不可达）"})
-                    return st
-            # 2) 静默安装
-            st["state"] = "installing"
-            subprocess.run(["msiexec", "/i", cache, "/quiet", "/norestart"],
-                           capture_output=True, timeout=600)
-            if not os.path.exists(self.WARP_CLI):
-                # 权限不足时提权重装（会弹一次 UAC 确认）
-                try:
-                    subprocess.run(
-                        ["powershell", "-NoProfile", "-Command",
-                         f'Start-Process msiexec -ArgumentList "/i", "{cache}", "/quiet", "/norestart" -Verb RunAs -Wait'],
-                        capture_output=True, timeout=600,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-            if not os.path.exists(self.WARP_CLI):
-                st.update({"state": "failed", "err": "WARP 安装失败（需要管理员授权一次）"})
-                return st
-            # 3) 注册并连接
             st["state"] = "connecting"
-            subprocess.run([self.WARP_CLI, "register"], capture_output=True, timeout=60)
+            subprocess.run([self.WARP_CLI, "mode", "proxy"], capture_output=True, timeout=30)
             subprocess.run([self.WARP_CLI, "connect"], capture_output=True, timeout=60)
-            time.sleep(6)
-            if self._detect_warp():
+            time.sleep(4)
+            if self._detect_warp_proxy() or self._detect_warp():
                 st.update({"state": "connected", "err": ""})
             else:
-                st.update({"state": "failed", "err": "WARP 连接未就绪，请稍后自动重试"})
+                st.update({"state": "failed", "err": "WARP 连接未就绪，稍后自动重试"})
             return st
         except Exception as exc:  # noqa: BLE001
             st.update({"state": "failed", "err": str(exc)[:200]})
             return st
 
     def accel_status(self) -> dict:
-        """加速系统状态：WARP / 系统代理 / 直连。"""
+        """加速系统状态：WARP 代理 / 系统代理 / 直连。"""
+        warp_proxy = self._detect_warp_proxy()
         warp = self._detect_warp()
         proxy = self._detect_proxy()
-        st = {"warp": warp, "proxy": proxy, "auto": dict(self._warp_attempt)}
-        if warp:
-            st["mode"], st["label"] = "warp", "Cloudflare WARP 加速中（全局隧道）"
+        st = {"warp": warp, "warp_proxy": warp_proxy, "proxy": proxy, "auto": dict(self._warp_attempt)}
+        if warp_proxy:
+            st["mode"], st["label"] = "warp_proxy", "WARP 代理加速中（仅中继，不接管系统流量）"
         elif proxy:
             st["mode"], st["label"] = "proxy", f"系统代理加速中（{proxy}）"
+        elif warp:
+            st["mode"], st["label"] = "warp", "WARP 已运行（未用代理模式，建议在 WARP 设置里选仅代理）"
         else:
-            st["mode"], st["label"] = "direct", "直连（无加速通道，中继将自动安装并启用 WARP 加速）"
+            st["mode"], st["label"] = "direct", "直连（中继不可达时自动提示走公共通道 MQTT）"
         return st
 
+    def _detect_warp_proxy(self) -> str | None:
+        """WARP 代理模式端口 40000（仅代理流量，不接管系统）：监听中即视为可用。"""
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            import socket
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            try:
+                s.connect(("127.0.0.1", 40000))
+                return "http://127.0.0.1:40000"
+            finally:
+                s.close()
+        except Exception:  # noqa: BLE001
+            return None
+
     def _relay_opener(self):
-        proxy = self._detect_proxy()
+        proxy = self._detect_warp_proxy() or self._detect_proxy()
         if proxy:
             handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
             return urllib.request.build_opener(handler)
@@ -575,7 +564,7 @@ class Node:
             if (self.relay_url and fails >= RELAY_BACKOFF_AFTER
                     and not self._detect_warp() and not self._detect_proxy()):
                 self._warp_ensure()
-                if self._detect_warp():
+                if self._detect_warp_proxy() or self._detect_warp():
                     fails = 0  # 加速就绪，立即恢复轮询
             interval = RELAY_POLL_INTERVAL * (RELAY_BACKOFF_MULT if fails >= RELAY_BACKOFF_AFTER else 1)
             self._stop.wait(interval)
