@@ -300,7 +300,7 @@ class NekoCommunityChatPlugin(NekoPluginBase):
             "service": "http://127.0.0.1:7870/chat",
             "server_started": bool(self._server_started),
             "messages": len(_server.read_all_messages()),
-            "feed": "https://community.project-neko.cn/api/feed",
+            "feed": "http://127.0.0.1:7870/api/feed",
         }
 
 

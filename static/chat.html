@@ -56,7 +56,6 @@
   .post .srcTag { font-size:10px; padding:1px 6px; border-radius:8px; margin-left:6px; }
   .srcTag.local { background:#c8f7ab; color:#4a7a1f; }
   .srcTag.remote { background:#dbe7ff; color:#3a5fb0; }
-  .srcTag.official { background:#ffe9c7; color:#a06a1f; }
   /* 节点与设置 */
   #nodeView { display:none; flex:1; overflow-y:auto; padding:16px; }
   .card { background:#fff; border:1px solid #e3e5e8; border-radius:12px; padding:14px 16px; margin-bottom:12px; }
@@ -200,8 +199,8 @@ async function poll() {
 function renderPost(p) {
   const post = el("div", "post");
   const head = el("div", "author", p.author || p.author_name || p.peer_name || "社区用户");
-  const srcTag = el("span", "srcTag " + (p.peer_id ? (p.origin === "relay" ? "remote" : "local") : "official"),
-    p.peer_id ? (p.origin === "relay" ? "公网" : "局域网") : "官方社区");
+  const srcTag = el("span", "srcTag " + (p.origin === "relay" ? "remote" : "local"),
+    p.origin === "relay" ? "公网" : "局域网");
   head.appendChild(srcTag);
   const content = el("div", "content", p.content || p.text || p.title || JSON.stringify(p).slice(0, 120));
   const time = el("div", "time", p.created_at || p.ts || "");
@@ -224,17 +223,7 @@ async function loadFeed() {
       listBox.appendChild(el("div", "tip", "—— 自建社区墙 ——"));
       for (const p of posts) listBox.appendChild(renderPost(p));
     }
-    // 官方社区
-    let official = j.official && j.official.data;
-    let list = [];
-    if (official) { try { official = JSON.parse(official); } catch (e) {} }
-    if (official && Array.isArray(official.posts)) list = official.posts;
-    else if (official && Array.isArray(official.data)) list = official.data;
-    if (list.length) {
-      listBox.appendChild(el("div", "tip", "—— 官方社区（只读） ——"));
-      for (const p of list) listBox.appendChild(renderPost(p));
-    }
-    if (!posts.length && !list.length) {
+    if (!posts.length) {
       listBox.appendChild(el("div", "tip", "社区暂无动态，发第一条吧"));
     }
   } catch (e) {
@@ -321,7 +310,7 @@ async function loadNodes() {
     const mqttHostRow = el("div", "fieldRow");
     mqttHostRow.appendChild(el("label", "", "Broker"));
     const mqttHost = el("input", "");
-    mqttHost.placeholder = "broker.emqx.io";
+    mqttHost.placeholder = "broker.hivemq.com（自动回退多个公共 broker）";
     mqttHostRow.appendChild(mqttHost);
     const mqttChanRow = el("div", "fieldRow");
     mqttChanRow.appendChild(el("label", "", "房间"));

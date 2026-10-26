@@ -56,7 +56,6 @@
   .post .srcTag { font-size:10px; padding:1px 6px; border-radius:8px; margin-left:6px; }
   .srcTag.local { background:#c8f7ab; color:#4a7a1f; }
   .srcTag.remote { background:#dbe7ff; color:#3a5fb0; }
-  .srcTag.official { background:#ffe9c7; color:#a06a1f; }
   /* 节点与设置 */
   #nodeView { display:none; flex:1; overflow-y:auto; padding:16px; }
   .card { background:#fff; border:1px solid #e3e5e8; border-radius:12px; padding:14px 16px; margin-bottom:12px; }
@@ -200,8 +199,8 @@ async function poll() {
 function renderPost(p) {
   const post = el("div", "post");
   const head = el("div", "author", p.author || p.author_name || p.peer_name || "社区用户");
-  const srcTag = el("span", "srcTag " + (p.peer_id ? (p.origin === "relay" ? "remote" : "local") : "official"),
-    p.peer_id ? (p.origin === "relay" ? "公网" : "局域网") : "官方社区");
+  const srcTag = el("span", "srcTag " + (p.origin === "relay" ? "remote" : "local"),
+    p.origin === "relay" ? "公网" : "局域网");
   head.appendChild(srcTag);
   const content = el("div", "content", p.content || p.text || p.title || JSON.stringify(p).slice(0, 120));
   const time = el("div", "time", p.created_at || p.ts || "");
@@ -224,17 +223,7 @@ async function loadFeed() {
       listBox.appendChild(el("div", "tip", "—— 自建社区墙 ——"));
       for (const p of posts) listBox.appendChild(renderPost(p));
     }
-    // 官方社区
-    let official = j.official && j.official.data;
-    let list = [];
-    if (official) { try { official = JSON.parse(official); } catch (e) {} }
-    if (official && Array.isArray(official.posts)) list = official.posts;
-    else if (official && Array.isArray(official.data)) list = official.data;
-    if (list.length) {
-      listBox.appendChild(el("div", "tip", "—— 官方社区（只读） ——"));
-      for (const p of list) listBox.appendChild(renderPost(p));
-    }
-    if (!posts.length && !list.length) {
+    if (!posts.length) {
       listBox.appendChild(el("div", "tip", "社区暂无动态，发第一条吧"));
     }
   } catch (e) {
@@ -308,14 +297,46 @@ async function loadNodes() {
     const relayInput = el("input", "");
     relayInput.placeholder = "https://your-relay.workers.dev";
     relayRow.appendChild(relayInput);
-    set.appendChild(el("div", "tip", "公网通道：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后，把中继地址填到这里并保存，全球所有装了本插件的人即可互通（含昵称、定向回复）；留空则仅局域网互通。"));
+    set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。留空则用下方公共通道。"));
+    // 公共通道（MQTT）
+    const mqttCard = el("div", "card");
+    mqttCard.appendChild(el("h3", "", "公共通道（开箱即用）"));
+    const mqttRow = el("div", "fieldRow");
+    const mqttOn = el("input", "");
+    mqttOn.type = "checkbox";
+    mqttOn.id = "mqttOn";
+    mqttRow.appendChild(el("label", "", "启用全球互通（MQTT）"));
+    mqttRow.appendChild(mqttOn);
+    const mqttHostRow = el("div", "fieldRow");
+    mqttHostRow.appendChild(el("label", "", "Broker"));
+    const mqttHost = el("input", "");
+    mqttHost.placeholder = "broker.hivemq.com（自动回退多个公共 broker）";
+    mqttHostRow.appendChild(mqttHost);
+    const mqttChanRow = el("div", "fieldRow");
+    mqttChanRow.appendChild(el("label", "", "房间"));
+    const mqttChan = el("input", "");
+    mqttChan.placeholder = "neko-universe";
+    mqttChanRow.appendChild(mqttChan);
+    const mqttStatus = el("div", "tip");
+    mqttStatus.id = "mqttStatus";
+    mqttCard.appendChild(mqttRow);
+    mqttCard.appendChild(mqttHostRow);
+    mqttCard.appendChild(mqttChanRow);
+    mqttCard.appendChild(mqttStatus);
     const save = el("button", "", "保存设置");
     save.id = "saveSettings";
     save.addEventListener("click", async () => {
       const sr = await fetch(API + "/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: nameInput.value, relay_url: relayInput.value })
+        body: JSON.stringify({
+          name: nameInput.value,
+          relay_url: relayInput.value,
+          mqtt_enabled: mqttOn.checked,
+          mqtt_host: mqttHost.value,
+          mqtt_port: 1883,
+          mqtt_channel: mqttChan.value
+        })
       });
       const sj = await sr.json();
       if (sj.ok) {
@@ -329,10 +350,29 @@ async function loadNodes() {
     set.appendChild(relayRow);
     set.appendChild(save);
     box.appendChild(set);
-    // 预填中继 URL
+    box.appendChild(mqttCard);
+    // 预填设置
     const sr2 = await fetch(API + "/api/settings");
     const sj2 = await sr2.json();
-    if (sj2.ok && sj2.settings && sj2.settings.relay_url) relayInput.value = sj2.settings.relay_url;
+    if (sj2.ok && sj2.settings) {
+      if (sj2.settings.relay_url) relayInput.value = sj2.settings.relay_url;
+      if (sj2.settings.mqtt_enabled !== undefined) mqttOn.checked = !!sj2.settings.mqtt_enabled;
+      if (sj2.settings.mqtt_host) mqttHost.value = sj2.settings.mqtt_host;
+      if (sj2.settings.mqtt_channel) mqttChan.value = sj2.settings.mqtt_channel;
+      if (sj2.settings.mqtt_host && sj2.settings.mqtt_channel) {
+        mqttStatus.textContent = "配置已载入（保存后生效）";
+      }
+    }
+    // 公网状态
+    try {
+      const pr = await fetch(API + "/api/peers");
+      const pj = await pr.json();
+      if (pj.ok && pj.mqtt) {
+        mqttStatus.textContent = pj.mqtt.enabled
+          ? (pj.mqtt.online ? "公共通道已连接（" + pj.mqtt.host + " · 房间 " + pj.mqtt.channel + "）" : "公共通道连接中…（" + pj.mqtt.host + "）")
+          : "公共通道已关闭";
+      }
+    } catch (e) { /* 状态非关键 */ }
   } catch (e) {
     const box = document.getElementById("nodeView");
     box.innerHTML = "";

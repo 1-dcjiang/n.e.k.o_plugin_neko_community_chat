@@ -6,7 +6,7 @@
 - POST /api/relay/inbox        远端 peer LAN 直推入口（校验来源 + 限速）
 - GET  /api/peers              在线节点列表（LAN + 中继可见 peer）
 - POST /api/posts              社区墙发帖（msg_type=post，广播给所有 peer）
-- GET  /api/feed               社区动态（官方 feed + 自建墙帖子合并）
+- GET  /api/feed               社区墙帖子（所有节点发帖）
 - GET  /api/settings POST /api/settings   节点昵称/公网中继 URL
 - GET  /api/history            全量历史（面板首屏）
 - GET  /chat                   聊天面板页面（客户端面板）
@@ -26,16 +26,12 @@ import json
 import os
 import threading
 import time
-import urllib.error
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import node as node_mod
 
 DEFAULT_PORT = 7870
 LAN_HTTP_PORT = 7871  # 局域网互推专用口（绑 0.0.0.0，只开放 /api/relay/inbox）
-SOCIAL_FEED_URL = "https://community.project-neko.cn/api/feed"
-FEED_TIMEOUT = 12.0
 
 # 模块级节点（server 启动时由插件注入）
 _NODE: node_mod.Node | None = None
@@ -124,19 +120,6 @@ def read_all_messages() -> list[dict]:
             return [json.loads(line) for line in f if line.strip()]
     except (OSError, ValueError):
         return []
-
-
-def fetch_social_feed() -> dict:
-    """代理喵宇宙社区动态流（真实接口）。失败如实返回错误，不编造。"""
-    req = urllib.request.Request(SOCIAL_FEED_URL, headers={"User-Agent": "Mozilla/5.0 neko-community-chat/0.2"})
-    try:
-        with urllib.request.urlopen(req, timeout=FEED_TIMEOUT) as resp:
-            raw = resp.read(2 * 1024 * 1024).decode("utf-8", errors="replace")
-        return {"ok": True, "data": raw}
-    except urllib.error.HTTPError as exc:
-        return {"ok": False, "error": f"HTTP {exc.code}", "status": exc.code}
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)[:200]}
 
 
 def read_posts() -> list[dict]:
@@ -268,10 +251,7 @@ class _Handler(BaseHTTPRequestHandler):
             # 聊天轮询只返回 chat 消息（社区墙帖子走 /api/feed）
             return self._json({"ok": True, "messages": [m for m in read_messages(after) if (m.get("msg_type") or "chat") == "chat"]})
         if path == "/api/feed":
-            official = fetch_social_feed()
-            return self._json(
-                {"ok": True, "official": official, "posts": read_posts()}
-            )
+            return self._json({"ok": True, "posts": read_posts()})
         if path == "/api/peers":
             n = get_node()
             peers = n.peers_snapshot() if n is not None else []

@@ -18,10 +18,22 @@
 
 const RELAY_TOKEN = ""; // 可选：非空时 send/poll 需带 ?token= 或 X-Relay-Token 头
 
+const corsHeaders = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-Relay-Token",
+};
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // 浏览器面板跨域调用前的 CORS 预检
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
 
     if (path === "/relay/health") {
       return json({ ok: true, service: "neko-community-relay" });
@@ -62,9 +74,7 @@ function authed(request, url, token) {
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
-               "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-               "Access-Control-Allow-Headers": "Content-Type, X-Relay-Token" },
+    headers: corsHeaders,
   });
 }
 

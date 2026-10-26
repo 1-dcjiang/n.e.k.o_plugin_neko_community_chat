@@ -114,3 +114,75 @@ def test_dedup_seen():
     assert n._mqtt_dedup_seen(m1) is False  # 重复丢弃
     m2 = {"peer_id": "node-B", "message": {"text": "hello", "ts": 101}}
     assert n._mqtt_dedup_seen(m2) is True  # 时间戳不同 → 放行
+
+
+def test_hosts_list_dedup():
+    """fallback_hosts 与主 host 去重、顺序正确。"""
+    link = mqtt_mod.MQTTLink(
+        host="h1", port=1883, channel="t", peer_id="node-A", peer_name="A",
+        on_message=lambda d: None,
+        fallback_hosts=["h2", "h1", "h3", "h2"],
+    )
+    assert link._hosts == ["h1", "h2", "h3"]
+    link2 = mqtt_mod.MQTTLink(
+        host="h1", port=1883, channel="t", peer_id="node-A", peer_name="A",
+        on_message=lambda d: None,
+        fallback_hosts=["h2"],
+    )
+    assert link2._hosts == ["h1", "h2"]
+
+
+def test_connect_fallback_to_local_broker():
+    """主 host 不可达（DNS 失败）时自动回退到可达的本地 mock broker，并更新 host。"""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(2)
+    connected_flag = threading.Event()
+
+    def broker_loop():
+        try:
+            while not connected_flag.is_set():
+                try:
+                    srv.settimeout(3.0)
+                    conn, _ = srv.accept()
+                except socket.timeout:
+                    break
+                except OSError:
+                    break
+                try:
+                    with conn:
+                        conn.settimeout(3.0)
+                        header = conn.recv(1)
+                        if not header or header[0] >> 4 != 0x01:  # CONNECT
+                            continue
+                        conn.recv(256)
+                        conn.sendall(b"\x20\x02\x00\x00")  # CONNACK accepted
+                        for _ in range(2):
+                            data = conn.recv(256)
+                            if not data:
+                                break
+                            conn.sendall(b"\x90\x03\x00\x01\x00")  # SUBACK QoS1 granted
+                        connected_flag.set()
+                except OSError:
+                    pass
+        finally:
+            srv.close()
+
+    t = threading.Thread(target=broker_loop, daemon=True)
+    t.start()
+    link = mqtt_mod.MQTTLink(
+        host="no-such-host.invalid", port=port, channel="t",
+        peer_id="node-A", peer_name="A", on_message=lambda d: None,
+        fallback_hosts=["127.0.0.1"],
+    )
+    thread = threading.Thread(target=link._connect_and_loop, daemon=True)
+    thread.start()
+    try:
+        assert connected_flag.wait(5), "fallback broker not reached"
+        assert link.online
+        assert link.host == "127.0.0.1"  # 已切到实际连上的 broker
+    finally:
+        link.stop()
+        srv.close()

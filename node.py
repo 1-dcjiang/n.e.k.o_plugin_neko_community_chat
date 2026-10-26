@@ -29,13 +29,16 @@ LAN_HELLO_PREFIX = "neko-cc-v1"
 PEER_TTL = 30.0          # 2 轮广播未到即移除
 LAN_PUSH_RETRY = 2
 RELAY_POLL_INTERVAL = 3.0
+RELAY_HTTP_TIMEOUT = 5.0    # 中继请求超时（秒）
+RELAY_BACKOFF_AFTER = 3     # 连续失败 N 次后放慢轮询
+RELAY_BACKOFF_MULT = 3      # 放慢倍数
 RELAY_URL_ENV = "NEKO_COMMUNITY_RELAY"
 PORT_ENV = "NEKO_COMMUNITY_CHAT_PORT"
 DEFAULT_PORT_HTTP = 7870
 MAX_TEXT_LEN = 2000
 RATE_LIMIT_PER_PEER = (10.0, 60)  # 10 秒窗口最多 60 条
 
-MQTT_DEFAULT_HOST = "broker.emqx.io"
+MQTT_DEFAULT_HOST = "broker.hivemq.com"  # 实测国内可达；不可达时自动回退 mqtt_mod.MQTT_DEFAULT_HOSTS
 MQTT_DEFAULT_CHANNEL = "neko-universe"
 MQTT_ENV_ENABLED = "NEKO_COMMUNITY_MQTT"  # "0" 关闭，空/其他视为跟随设置
 MQTT_DEDUP_WINDOW = 300
@@ -213,6 +216,7 @@ class Node:
                 peer_id=self.peer_id,
                 peer_name=self.name,
                 on_message=self._on_mqtt_message,
+                fallback_hosts=list(mqtt_mod.MQTT_DEFAULT_HOSTS),
             )
             self._mqtt.start()
 
@@ -401,23 +405,55 @@ class Node:
         return False
 
     # ── 公网中继通道（HTTP 轮询，兼容 Cloudflare Worker）──────────
+    # 自动加速：请求自动跟随系统代理（WARP/Clash 等常以 HTTPS_PROXY 或
+    # Windows 系统代理形式存在），直连超时后连续失败自动放慢轮询（backoff）。
+
+    def _detect_proxy(self) -> str | None:
+        """探测可用代理：优先环境变量，其次 Windows 系统代理。"""
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+            v = os.environ.get(var, "").strip()
+            if v:
+                return v
+        try:
+            import winreg
+
+            key = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                enable, _ = winreg.QueryValueEx(k, "ProxyEnable")
+                server, _ = winreg.QueryValueEx(k, "ProxyServer")
+            if enable and server:
+                return server if "://" in server else "http://" + server
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _relay_opener(self):
+        proxy = self._detect_proxy()
+        if proxy:
+            handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+            return urllib.request.build_opener(handler)
+        return urllib.request.build_opener()
 
     def _relay_loop(self) -> None:
+        fails = 0
         while not self._stop.is_set():
             if not self.relay_url:
                 self._stop.wait(RELAY_POLL_INTERVAL)
                 continue
             try:
                 self._relay_poll()
+                fails = 0
             except Exception as exc:  # noqa: BLE001
+                fails += 1
                 logger.debug("relay poll failed: %s", exc)
-            self._stop.wait(RELAY_POLL_INTERVAL)
+            interval = RELAY_POLL_INTERVAL * (RELAY_BACKOFF_MULT if fails >= RELAY_BACKOFF_AFTER else 1)
+            self._stop.wait(interval)
 
     def _relay_poll(self) -> None:
         url = f"{self.relay_url}/relay/poll?peer_id={self.peer_id}&since={self._relay_since}"
         req = urllib.request.Request(url, headers={"User-Agent": "neko-community-chat/0.2"})
         try:
-            with urllib.request.urlopen(req, timeout=6) as resp:
+            with self._relay_opener().open(req, timeout=RELAY_HTTP_TIMEOUT) as resp:
                 data = json.loads(resp.read(2 * 1024 * 1024).decode("utf-8") or "{}")
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
             return
@@ -451,7 +487,7 @@ class Node:
             headers={"Content-Type": "application/json", "User-Agent": "neko-community-chat/0.2"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=6) as resp:
+            with self._relay_opener().open(req, timeout=RELAY_HTTP_TIMEOUT) as resp:
                 return resp.status == 200
         except (urllib.error.HTTPError, urllib.error.URLError, OSError):
             return False

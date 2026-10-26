@@ -1,7 +1,9 @@
 """neko_community_chat 公网通道：最小 MQTT 3.1.1 客户端（纯标准库，零依赖）。
 
-公共 MQTT broker（如 broker.emqx.io:1883）免费开放，节点订阅统一主题即可
+公共 MQTT broker（如 broker.hivemq.com:1883）免费开放，节点订阅统一主题即可
 全球互通，无需部署任何服务器/账号。消息为明文，适合公开聊天房间。
+多 broker 自动回退：主 host 不可达时按 MQTT_DEFAULT_HOSTS 依次尝试，
+连接成功后 status() 的 host 会显示实际连上的 broker。
 
 协议（QoS 0，够用）：
   broadcast topic: neko_cc/{channel}/broadcast
@@ -32,6 +34,10 @@ SOCK_TIMEOUT = 8.0
 PUB_ACK_TIMEOUT = 6.0
 MAX_PAYLOAD = 8 * 1024 * 1024
 TOPIC_PREFIX = "neko_cc"
+
+# 公共 broker 回退列表（实测可达优先）：主 host 连接失败时依次尝试。
+# broker.emqx.io 国际公共实例国内经常不可达，故排在回退位。
+MQTT_DEFAULT_HOSTS = ("broker.hivemq.com", "broker.mqttdashboard.com", "broker.emqx.io")
 
 
 def _encode_str(s: str) -> bytes:
@@ -93,6 +99,7 @@ class MQTTLink(threading.Thread):
         on_message,
         port: int = MQTT_TCP_PORT,
         client_id: str | None = None,
+        fallback_hosts: list[str] | None = None,
     ) -> None:
         super().__init__(daemon=True, name="neko-cc-mqtt")
         self.host = host
@@ -104,6 +111,10 @@ class MQTTLink(threading.Thread):
         # 固定 client_id + 持久会话（clean_session=0）：离线消息由 broker 缓存，
         # 重连后送达；QoS1 带确认，发送方重试。
         self.client_id = client_id or f"neko-{peer_id[-32:]}"
+        self._hosts: list[str] = [host]
+        for h in fallback_hosts or ():
+            if h and h != host and h not in self._hosts:
+                self._hosts.append(h)
         self._sock: socket.socket | None = None
         self._lock = threading.Lock()  # 保护 sock（publish 与读循环）
         self._stop = threading.Event()
@@ -186,14 +197,27 @@ class MQTTLink(threading.Thread):
             backoff = min(backoff * 1.6, RECONNECT_MAX)
 
     def _connect_and_loop(self) -> None:
-        sock = socket.create_connection((self.host, self.port), timeout=SOCK_TIMEOUT)
-        sock.settimeout(SOCK_TIMEOUT)
-        self._send_connect(sock)
-        self._recv_connack(sock)
-        topics = self._topics()
-        for t in topics:
-            self._send_subscribe(sock, t)
-            self._recv_suback(sock)
+        sock: socket.socket | None = None
+        last_err: Exception | None = None
+        for host in self._hosts:
+            try:
+                sock = socket.create_connection((host, self.port), timeout=SOCK_TIMEOUT)
+                sock.settimeout(SOCK_TIMEOUT)
+                self._send_connect(sock)
+                self._recv_connack(sock)
+                topics = self._topics()
+                for t in topics:
+                    self._send_subscribe(sock, t)
+                    self._recv_suback(sock)
+                break
+            except Exception as exc:  # noqa: BLE001 —— 该 broker 不可达，试下一个
+                last_err = exc
+                self._close_raw(sock)
+                sock = None
+                logger.info("mqtt broker %s:%s unreachable: %s", host, self.port, exc)
+        if sock is None:
+            raise ConnectionError(f"all brokers unreachable: {last_err}")
+        self.host = host  # 更新为实际连上的 broker（状态显示用）
         with self._lock:
             self._sock = sock
         self.online = True
@@ -209,6 +233,14 @@ class MQTTLink(threading.Thread):
             except (OSError, ConnectionError):
                 break
         self._read_loop(sock)
+
+    @staticmethod
+    def _close_raw(sock: socket.socket | None) -> None:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def _read_loop(self, sock: socket.socket) -> None:
         while not self._stop.is_set():
