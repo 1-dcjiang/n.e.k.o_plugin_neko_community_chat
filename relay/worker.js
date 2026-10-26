@@ -16,6 +16,8 @@
  * 所有活跃 peer（或定向 target）；无消息 120s 的 peer 视为离线清理。
  */
 
+import { DurableObject } from "cloudflare:workers";
+
 const RELAY_TOKEN = ""; // 可选：非空时 send/poll 需带 ?token= 或 X-Relay-Token 头
 
 const corsHeaders = {
@@ -51,14 +53,17 @@ export default {
       }
       let body;
       try { body = await request.json(); } catch { return json({ ok: false, error: "bad json" }, 400); }
-      return stub.handleSend(body, url);
+      return stub.handleSend(body);
     }
 
     if (path === "/relay/poll" && request.method === "GET") {
       if (RELAY_TOKEN && !authed(request, url, RELAY_TOKEN)) {
         return json({ ok: false, error: "unauthorized" }, 401);
       }
-      return stub.handlePoll(url);
+      const peerId = url.searchParams.get("peer_id") || "";
+      const since = Math.max(0, parseInt(url.searchParams.get("since") || "0", 10) || 0);
+      const name = url.searchParams.get("name") || "";
+      return stub.handlePoll(peerId, since, name);
     }
 
     return json({ ok: false, error: "not found" }, 404);
@@ -83,8 +88,9 @@ const MAX_MSG_LEN = 2000;
 const RATE_WINDOW_MS = 10_000;
 const RATE_LIMIT = 60;            // 每 peer 每 10s 最多 60 条
 
-export class Relay {
+export class Relay extends DurableObject {
   constructor(state, env) {
+    super(state, env);
     this.state = state;
     // 结构化数据（非事务持久，够用；重启清空可接受）
     this.queues = new Map();    // peer_id -> [{seq, msg}]
@@ -123,7 +129,7 @@ export class Relay {
     return seq;
   }
 
-  async handleSend(body, url) {
+  async handleSend(body) {
     const peerId = String(body.peer_id || "").slice(0, 64);
     if (!peerId) return json({ ok: false, error: "missing peer_id" }, 400);
     if (!this._rateOk(peerId)) return json({ ok: false, error: "rate limited" }, 429);
@@ -166,11 +172,11 @@ export class Relay {
     if (q.length > 200) q.splice(0, q.length - 200);
   }
 
-  async handlePoll(url) {
-    const peerId = String(url.searchParams.get("peer_id") || "").slice(0, 64);
+  async handlePoll(peerId, sinceRaw, name) {
+    peerId = String(peerId || "").slice(0, 64);
     if (!peerId) return json({ ok: false, error: "missing peer_id" }, 400);
-    this._touch(peerId, url.searchParams.get("name") || "");
-    const since = Math.max(0, parseInt(url.searchParams.get("since") || "0", 10) || 0);
+    this._touch(peerId, name || "");
+    const since = Math.max(0, parseInt(sinceRaw || "0", 10) || 0);
     const q = this.queues.get(peerId) || [];
     const fresh = q.filter((e) => e.seq > since);
     // 清理已投递
