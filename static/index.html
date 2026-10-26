@@ -295,6 +295,7 @@ async function loadNodes() {
     const relayRow = el("div", "fieldRow");
     relayRow.appendChild(el("label", "", "中继 URL"));
     const relayInput = el("input", "");
+    relayInput.type = "password"; // 隐私：默认密文显示（URL 中可能含账号数字），聚焦时明文
     relayInput.placeholder = "https://your-relay.workers.dev";
     relayRow.appendChild(relayInput);
     set.appendChild(el("div", "tip", "进阶：部署 relay/worker.js（Cloudflare Workers，详见 docs/guide.md）后把地址填这里，可替代公共通道。留空则用下方公共通道。"));
