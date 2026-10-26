@@ -302,6 +302,24 @@ class NekoCommunityChatPlugin(NekoPluginBase):
             "feed": "http://127.0.0.1:7870/api/feed",
         }
 
+    @llm_tool(
+        name="community_audit",
+        description=(
+            "审核一条社区消息是否合规（YUI 审核机制）：判断是否存在刷屏（连续重复字符）、违规引流"
+            "（刷单/代开发票/办证/博彩/裸聊）、危险品交易（毒品/枪支/爆炸物）、诈骗话术等违规内容。"
+            "返回 allow=true 表示放行，allow=false 表示应拦截。何时用：社区聊天/动态的内容复核、"
+            "判断一句话能不能发进社区。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "待审核的消息文本"}},
+            "required": ["text"],
+        },
+    )
+    async def community_audit(self, text: str) -> dict:
+        ok, reason = _server.audit_text(str(text or ""))
+        return {"allow": ok, "reason": reason or "通过", "audited_by": "local-engine"}
+
 
 def server_port() -> int:
     return int(os.environ.get("NEKO_COMMUNITY_CHAT_PORT") or _server.DEFAULT_PORT)

@@ -33,6 +33,9 @@
   .msg.remote .bubble { background:#eef3fb; border:1px solid #d6e2f5; }
   .msg .meta { font-size:10px; color:#a2a6ad; align-self:flex-end; }
   .msg .tag { font-size:10px; padding:1px 6px; border-radius:8px; align-self:flex-end; }
+  .msg .recallBtn { font-size:10px; color:#f87171; cursor:pointer; align-self:flex-end; padding:1px 6px; border:1px solid #fecaca; border-radius:8px; }
+  .msg .recallBtn:hover { background:#fef2f2; }
+  .msg .bubble.recalled { color:#a2a6ad; background:#f3f4f6; border:1px dashed #d1d5db; font-style:italic; }
   .msg.user .tag { background:#c8f7ab; color:#4a7a1f; }
   .msg.remote .tag { background:#dbe7ff; color:#3a5fb0; }
   .msg.yui .tag { background:#eceef1; color:#5f6672; }
@@ -136,16 +139,33 @@ function msgClass(m) {
 function renderMessage(m) {
   const cls = msgClass(m);
   const wrap = el("div", "msg " + cls);
-  const bubble = el("div", "bubble", m.text);
+  const bubble = el("div", "bubble", m.recalled ? "（该消息已撤回）" : m.text);
+  if (m.recalled) bubble.classList.add("recalled");
   const meta = el("div", "meta", (m.ts || "") + (m.target_peer ? " · 已回复远端" : ""));
   wrap.appendChild(bubble);
   wrap.appendChild(meta);
-  // 来源标签
+  // 来源标签：每个人都显示自己的昵称（自己=昵称、远端=peer_name、YUI=YUI）
   const tag = el("div", "tag");
   if (cls === "remote") tag.textContent = (m.peer_name || "远端") + " · " + (m.origin === "relay" ? "公网" : "局域网");
-  else if (cls === "user") tag.textContent = "我";
+  else if (cls === "user") tag.textContent = (selfPeer && selfPeer.name) || "我";
   else tag.textContent = "YUI";
   wrap.appendChild(tag);
+  // 撤回按钮：只对自己的消息显示（本地消息可精确定位：peer_id 为本机 / origin=local / 无 peer_id）
+  if (cls === "user" && !m.recalled) {
+    const rbtn = el("div", "recallBtn", "撤回");
+    rbtn.onclick = async () => {
+      const body = JSON.stringify({ msg_uid: m.msg_uid || String(m.id) });
+      try {
+        const r = await fetch(API + "/api/recall", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body
+        });
+        const j = await r.json();
+        if (j.ok) await loadHistory();
+        else alert("撤回失败：" + (j.error || "未知"));
+      } catch (e) { alert("本地服务不可达：" + e.message); }
+    };
+    wrap.appendChild(rbtn);
+  }
   return wrap;
 }
 
@@ -178,10 +198,12 @@ async function send() {
     } else {
       const box = document.getElementById("messages");
       box.appendChild(el("div", "tip err", "发送失败：" + (j.error || "未知")));
+      input.value = text;
     }
   } catch (e) {
     const box = document.getElementById("messages");
     box.appendChild(el("div", "tip err", "本地服务不可达：" + e.message));
+    input.value = text;
   } finally {
     btn.disabled = false;
   }
@@ -194,7 +216,25 @@ async function poll() {
     if (j.ok && Array.isArray(j.messages) && j.messages.length) {
       const box = document.getElementById("messages");
       for (const m of j.messages) {
-        if ((m.msg_type || "chat") !== "chat") continue;
+        if ((m.msg_type || "chat") !== "chat" || m.recalled) continue;
+        box.appendChild(renderMessage(m));
+        lastId = Math.max(lastId, Number(m.id) || 0);
+      }
+      scrollBottom();
+    }
+  } catch (e) { /* 静默 */ }
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch(API + "/api/messages?after_id=0");
+    const j = await r.json();
+    const box = document.getElementById("messages");
+    box.innerHTML = "";
+    lastId = 0;
+    if (j.ok && Array.isArray(j.messages)) {
+      for (const m of j.messages) {
+        if ((m.msg_type || "chat") !== "chat" || m.recalled) continue;
         box.appendChild(renderMessage(m));
         lastId = Math.max(lastId, Number(m.id) || 0);
       }
@@ -485,13 +525,14 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
 });
 
 (async function init() {
+  await loadNodes();  // 先取 selfPeer（本机昵称），历史消息才能正确显示昵称
   try {
     const r = await fetch(API + "/api/history");
     const j = await r.json();
     if (j.ok && Array.isArray(j.messages)) {
       const box = document.getElementById("messages");
       for (const m of j.messages) {
-        if ((m.msg_type || "chat") !== "chat") continue;
+        if ((m.msg_type || "chat") !== "chat" || m.recalled) continue;
         box.appendChild(renderMessage(m));
         lastId = Math.max(lastId, Number(m.id) || 0);
       }
@@ -500,7 +541,6 @@ document.querySelectorAll("#sidebar .item").forEach(item => {
   } catch (e) {
     document.getElementById("messages").appendChild(el("div", "tip err", "本地服务不可达：" + e.message));
   }
-  loadNodes();
   setInterval(poll, 3000);
 })();
 </script>

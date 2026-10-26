@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -76,9 +77,10 @@ _ID_LOCK = threading.Lock()
 
 
 def append_message(msg: dict) -> dict:
-    """追加一条消息到消息流，返回带 id/ts 的完整记录。"""
+    """追加一条消息到消息流，返回带 id/ts/msg_uid 的完整记录。"""
     with _ID_LOCK:
         msg["id"] = next_id()
+        msg.setdefault("msg_uid", uuid.uuid4().hex[:12])
         msg["ts"] = time.strftime("%H:%M:%S")
         p = messages_path()
         with open(p, "a", encoding="utf-8") as f:
@@ -128,6 +130,84 @@ def read_posts() -> list[dict]:
     return [m for m in read_all_messages() if (m.get("msg_type") or "chat") == "post"]
 
 
+# ── 本地内容审核（YUI 审核机制的即时兜底）──────────────────────
+# 规则 + 可扩展词表：词表存 data_dir/audit_words.txt（每行一个词，可自行增删）。
+_AUDIT_SPAM_RE = re.compile(r"(.)\1{19,}")  # 连续 20+ 相同字符（刷屏）
+_DEFAULT_AUDIT_WORDS = (
+    "刷单", "代开发票", "办假证", "出售驾照", "博彩", "赌球", "赌博网站",
+    "裸聊", "卖淫", "嫖娼", "毒品", "冰毒", "海洛因", "枪支", "军火", "爆炸物", "制毒",
+    "杀猪盘", "电信诈骗", "洗钱",
+)
+
+
+def _load_audit_words() -> tuple[str, ...]:
+    p = os.path.join(data_dir(), "audit_words.txt")
+    try:
+        with open(p, encoding="utf-8") as f:
+            extra = [ln.strip() for ln in f if ln.strip()]
+        return _DEFAULT_AUDIT_WORDS + tuple(extra)
+    except OSError:
+        return _DEFAULT_AUDIT_WORDS
+
+
+def audit_text(text: str) -> tuple[bool, str]:
+    """本地审核：返回 (是否通过, 拒绝原因)。不通过时消息不允许发布。"""
+    if not text:
+        return False, "内容为空"
+    if _AUDIT_SPAM_RE.search(text):
+        return False, "内容疑似刷屏，已拦截"
+    if len(set(text)) <= 2 and len(text) > 20:
+        return False, "内容疑似重复刷屏，已拦截"
+    for word in _load_audit_words():
+        if word in text:
+            return False, f"内容包含违规词「{word}」，已拦截"
+    return True, ""
+
+
+def _rewrite_messages(updates: dict) -> None:
+    """按 msg_uid/id 就地更新消息（不改变行数，id 行号保持稳定）。"""
+    p = messages_path()
+    with _ID_LOCK:
+        try:
+            with open(p, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return
+        changed = False
+        for i, ln in enumerate(lines):
+            if not ln.strip():
+                continue
+            try:
+                m = json.loads(ln)
+            except ValueError:
+                continue
+            if str(m.get("msg_uid") or "") == updates.get("msg_uid") or str(m.get("id") or "") == updates.get("id"):
+                m.update({k: v for k, v in updates.items() if v is not None and k not in ("msg_uid", "id")})
+                lines[i] = json.dumps(m, ensure_ascii=False)
+                changed = True
+        if changed:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+
+
+def mark_recalled(uid: str) -> bool:
+    """标记一条消息为已撤回（msg_uid 或本地 id 兜底）。"""
+    if not uid:
+        return False
+    before = None
+    for m in read_all_messages():
+        if str(m.get("msg_uid") or "") == uid or str(m.get("id") or "") == uid:
+            before = m
+            break
+    if before is None or before.get("recalled"):
+        return False
+    if str(before.get("msg_uid") or "") == uid:
+        _rewrite_messages({"msg_uid": uid, "recalled": True})
+    else:
+        _rewrite_messages({"id": uid, "recalled": True})
+    return True
+
+
 def local_posts_feed() -> dict:
     """社区墙：帖子 + 回复（post_reply 按 reply_to 挂到对应帖子下）。"""
     posts = []
@@ -154,10 +234,14 @@ def local_posts_feed() -> dict:
 
 
 def incoming_remote(msg: dict) -> None:
-    """远端 peer 消息落地：chat → 消息流 + inbox（唤醒本机 YUI）；post / post_reply → 仅进消息流。"""
+    """远端 peer 消息落地：recall → 标记撤回；post / post_reply → 仅进消息流；
+    chat → 消息流 + inbox（唤醒本机 YUI）。"""
     m = dict(msg)
     m.setdefault("origin", "lan")
     msg_type = m.get("msg_type") or "chat"
+    if msg_type == "recall":
+        mark_recalled(str(m.get("msg_uid") or "") or str(m.get("id") or ""))
+        return
     if msg_type in ("post", "post_reply"):
         append_message(m)
     else:
@@ -309,6 +393,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._post_relay_inbox()
         if path == "/api/posts":
             return self._post_posts()
+        if path == "/api/recall":
+            return self._post_recall()
         if path == "/api/settings":
             return self._post_settings()
         if path != "/api/messages":
@@ -324,6 +410,9 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "empty message"}, 400)
         if len(text) > 2000:
             return self._json({"ok": False, "error": "message too long"}, 400)
+        ok, reason = audit_text(text)
+        if not ok:
+            return self._json({"ok": False, "error": reason}, 400)
         target_peer = str(data.get("target_peer") or "").strip()[:64]
         msg = {"sender": sender, "text": text, "role": "user", "msg_type": "chat", "origin": "local",
                "target_peer": target_peer or None}
@@ -364,13 +453,18 @@ class _Handler(BaseHTTPRequestHandler):
         if data is None:
             return self._json({"ok": False, "error": "bad json"}, 400)
         text = str(data.get("text") or "").strip()
-        if not text or len(text) > 2000:
-            return self._json({"ok": False, "error": "bad message"}, 400)
+        msg_type = data.get("msg_type") or "chat"
+        if msg_type != "recall":  # 撤回通知无正文，不审核
+            if not text or len(text) > 2000:
+                return self._json({"ok": False, "error": "bad message"}, 400)
+            ok, reason = audit_text(text)
+            if not ok:
+                return self._json({"ok": False, "error": reason}, 400)
         msg = {
             "sender": str(data.get("sender") or peer_id[:12])[:40],
             "text": text,
             "role": "user",
-            "msg_type": data.get("msg_type") or "chat",
+            "msg_type": msg_type,
             "origin": "lan",
             "peer_id": peer_id,
             "peer_name": str(data.get("peer_name") or peer_id[:12])[:40],
@@ -379,13 +473,16 @@ class _Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True, "received": True}, 200)
 
     def _post_posts(self):
-        """社区墙发帖：新帖（post）或回复（post_reply），广播给所有 peer。"""
+        """社区墙发帖：新帖（post）或回复（post_reply），本地审核后广播给所有 peer。"""
         data = self._read_json_body()
         if data is None:
             return self._json({"ok": False, "error": "bad json"}, 400)
         text = str(data.get("text") or "").strip()
         if not text or len(text) > 2000:
             return self._json({"ok": False, "error": "bad post"}, 400)
+        ok, reason = audit_text(text)
+        if not ok:
+            return self._json({"ok": False, "error": reason}, 400)
         n = get_node()
         name = n.name if n is not None else "社区用户"
         reply_to = str(data.get("reply_to") or "").strip()[:64]
@@ -399,6 +496,35 @@ class _Handler(BaseHTTPRequestHandler):
         if n is not None:
             n.dispatch(recorded)
         return self._json({"ok": True, "post": recorded}, 201)
+
+    def _post_recall(self):
+        """撤回自己发送的消息（本机消息）并广播撤回通知。"""
+        data = self._read_json_body()
+        if data is None:
+            return self._json({"ok": False, "error": "bad json"}, 400)
+        uid = str(data.get("msg_uid") or "").strip()[:32]
+        if not uid:
+            return self._json({"ok": False, "error": "bad recall"}, 400)
+        n = get_node()
+        me = n.peer_id if n is not None else None
+        target = None
+        for m in read_all_messages():
+            if str(m.get("msg_uid") or "") == uid or str(m.get("id") or "") == uid:
+                target = m
+                break
+        if target is None:
+            return self._json({"ok": False, "error": "消息不存在"}, 404)
+        if target.get("recalled"):
+            return self._json({"ok": False, "error": "消息已撤回"}, 400)
+        owner = str(target.get("peer_id") or "")
+        # 权限：仅能撤回本机产生的消息（无 peer_id 的本机消息也允许）
+        if owner and me and owner != me:
+            return self._json({"ok": False, "error": "只能撤回自己发送的消息"}, 403)
+        if not mark_recalled(uid):
+            return self._json({"ok": False, "error": "撤回失败"}, 500)
+        if n is not None:
+            n.dispatch({"msg_type": "recall", "msg_uid": uid, "origin": "local"})
+        return self._json({"ok": True}, 200)
 
     def _post_settings(self):
         data = self._read_json_body()
